@@ -4,6 +4,8 @@
 //   1. Pantone color identification (frontend: extract-colors + pantone-tcx)
 //   2. Trial-vs-final comparison (frontend: pixelmatch + image diff)
 
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useDropzone } from 'react-dropzone';
@@ -44,13 +46,11 @@ function rgbToHex(r: number, g: number, b: number): string {
 async function analyzePantoneColors(file: File, k: number = 8, ignoreWhite: boolean = true, topN: number = 5): Promise<any> {
   return new Promise(async (resolve, reject) => {
     try {
-      // Step 1: Convert file to image URL
       const imageUrl = URL.createObjectURL(file);
       
-      // Step 2: Extract dominant colors using K-means clustering
       const colors = await extractColors(imageUrl, {
-        pixels: 64000,           // Total pixels to sample
-        distance: 0.22,          // Color distance threshold
+        pixels: 64000,
+        distance: 0.22,
         saturationDistance: 0.2,
         lightnessDistance: 0.2,
         hueDistance: 0.083333333
@@ -58,7 +58,6 @@ async function analyzePantoneColors(file: File, k: number = 8, ignoreWhite: bool
       
       URL.revokeObjectURL(imageUrl);
       
-      // Step 3: Filter out white if requested
       let filteredColors = colors;
       if (ignoreWhite) {
         filteredColors = colors.filter(c => {
@@ -68,18 +67,15 @@ async function analyzePantoneColors(file: File, k: number = 8, ignoreWhite: bool
         });
       }
       
-      // Step 4: Sort by area and take top k
       const topColors = filteredColors
         .sort((a, b) => b.area - a.area)
         .slice(0, k);
       
-      // Step 5: Match each color to Pantone TCX
       const extractedColors = topColors.map(color => {
         const hex = rgbToHex(color.red, color.green, color.blue);
         const pantoneMatch = getNearestPantone(hex);
         const similarMatches = getSimilarColors(hex, topN);
         
-        // Calculate confidence based on color distance
         const distance = (pantoneMatch as any).distance || 0;
         let confidence = 'high';
         if (distance < 5) confidence = 'exact';
@@ -148,10 +144,7 @@ async function runTrialComparison(
   
   for (let i = 0; i < trialProofs.length; i++) {
     const trialFile = trialProofs[i];
-    
-    // Compare images and calculate similarity
     const comparison = await compareImages(finalDesign, trialFile, colorThreshold);
-    
     const passed = comparison.accuracy >= minAccuracyForGo;
     
     trialReports.push({
@@ -174,7 +167,6 @@ async function runTrialComparison(
     });
   }
   
-  // Calculate overall decision
   const avgAccuracy = trialReports.reduce((sum, t) => sum + t.accuracy_score, 0) / trialReports.length;
   const allPassed = trialReports.every(t => t.passed);
   const hasCriticalErrors = trialReports.some(t => t.error_summary.critical.length > 0);
@@ -188,7 +180,6 @@ async function runTrialComparison(
     decision = 'NO-GO';
   }
   
-  // Calculate waste savings (if decision is GO, you saved waste)
   const wasteSavings = decision === 'GO' ? (wasteUnitCost * wasteRunSize) * 0.3 : 0;
   
   return {
@@ -203,7 +194,6 @@ async function runTrialComparison(
 
 async function compareImages(masterFile: File, trialFile: File, colorThreshold: number): Promise<any> {
   return new Promise((resolve) => {
-    // Load both images
     const masterImg = new Image();
     const trialImg = new Image();
     
@@ -215,7 +205,6 @@ async function compareImages(masterFile: File, trialFile: File, colorThreshold: 
     function checkComplete() {
       loadedCount++;
       if (loadedCount === 2) {
-        // Create canvases for pixel comparison
         const canvas1 = document.createElement('canvas');
         const canvas2 = document.createElement('canvas');
         const ctx1 = canvas1.getContext('2d');
@@ -235,7 +224,6 @@ async function compareImages(masterFile: File, trialFile: File, colorThreshold: 
         const imgData1 = ctx1?.getImageData(0, 0, width, height);
         const imgData2 = ctx2?.getImageData(0, 0, width, height);
         
-        // Calculate difference using pixelmatch
         const diff = new Uint8ClampedArray(width * height * 4);
         const mismatchedPixels = pixelmatch(
           imgData1!.data,
@@ -248,11 +236,8 @@ async function compareImages(masterFile: File, trialFile: File, colorThreshold: 
         
         const totalPixels = width * height;
         const similarity = ((totalPixels - mismatchedPixels) / totalPixels) * 100;
-        
-        // Calculate color difference
         const colorDiff = calculateColorDifference(imgData1!, imgData2!);
         
-        // Generate defects based on differences
         const defects: any[] = [];
         if (mismatchedPixels > totalPixels * 0.05) {
           defects.push({
@@ -272,7 +257,6 @@ async function compareImages(masterFile: File, trialFile: File, colorThreshold: 
           });
         }
         
-        // Text similarity (simplified for frontend)
         const textScore = similarity > 95 ? 100 : similarity > 85 ? 85 : similarity > 70 ? 70 : 50;
         
         URL.revokeObjectURL(masterImg.src);
@@ -297,7 +281,7 @@ async function compareImages(masterFile: File, trialFile: File, colorThreshold: 
 
 function calculateColorDifference(imgData1: ImageData, imgData2: ImageData): number {
   let totalDiff = 0;
-  const step = Math.floor(imgData1.data.length / 1000); // Sample pixels for performance
+  const step = Math.floor(imgData1.data.length / 1000);
   
   for (let i = 0; i < imgData1.data.length; i += step) {
     const r1 = imgData1.data[i];
@@ -357,17 +341,115 @@ export function PantoneIdentificationPage() {
     toast.success(`Copied: ${text}`);
   };
 
-  const downloadReport = () => {
-    if (!result) return;
-    const blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `pantone-report-${Date.now()}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast.success('Report downloaded');
-  };
+  async function downloadPantonePDF() {
+    if (!result) {
+      toast.error('No data to generate PDF');
+      return;
+    }
+
+    toast.loading('Generating PDF report...', { id: 'pdf-gen' });
+    
+    try {
+      const pdf = new jsPDF({
+        orientation: 'landscape',
+        unit: 'mm',
+        format: 'a4'
+      });
+
+      pdf.setFillColor(13, 27, 42);
+      pdf.rect(0, 0, pdf.internal.pageSize.getWidth(), 14, 'F');
+      pdf.setFontSize(9);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(255, 255, 255);
+      pdf.text('GREENPACK PRO — PANTONE COLOR IDENTIFICATION', pdf.internal.pageSize.getWidth() / 2, 9, { align: 'center' });
+      
+      pdf.setFontSize(14);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(0, 0, 0);
+      pdf.text('Identified Brand Color Palette (PANTONE)', pdf.internal.pageSize.getWidth() / 2, 28, { align: 'center' });
+      
+      const tableData = result.extracted_colors?.map((color: any) => [
+        '',
+        color.hex.toUpperCase(),
+        color.best_match_code,
+        color.best_match_delta_e?.toFixed(2) || '—',
+        color.match_confidence?.replace('_', ' ').toUpperCase() || '—',
+        `${color.area_pct}%`
+      ]) || [];
+      
+      if (tableData.length === 0) {
+        tableData.push(['—', '—', '—', '—', '—', '—']);
+      }
+      
+      autoTable(pdf, {
+        startY: 35,
+        head: [['Swatch', 'Hex', 'PANTONE Match', 'ΔE', 'Confidence', 'Area %']],
+        body: tableData,
+        theme: 'striped',
+        styles: {
+          fontSize: 8,
+          cellPadding: { top: 3, bottom: 3, left: 2, right: 2 },
+          halign: 'center',
+          valign: 'middle',
+        },
+        headStyles: {
+          fillColor: [13, 27, 42],
+          textColor: [255, 255, 255],
+          fontSize: 9,
+          fontStyle: 'bold',
+          halign: 'center',
+        },
+        alternateRowStyles: { fillColor: [249, 250, 251] },
+        columnStyles: {
+          0: { cellWidth: 15 },
+          1: { cellWidth: 30 },
+          2: { cellWidth: 45 },
+          3: { cellWidth: 20 },
+          4: { cellWidth: 30 },
+          5: { cellWidth: 20 },
+        },
+        margin: { left: 15, right: 15 },
+        didDrawCell: (data) => {
+          if (data.column.index === 0 && data.row.section === 'body' && data.cell.section === 'body') {
+            const colorData = result.extracted_colors?.[data.row.index];
+            if (colorData) {
+              const x = data.cell.x + 2;
+              const y = data.cell.y + 2;
+              const width = 11;
+              const height = 11;
+              
+              pdf.setFillColor(
+                parseInt(colorData.hex.slice(1, 3), 16),
+                parseInt(colorData.hex.slice(3, 5), 16),
+                parseInt(colorData.hex.slice(5, 7), 16)
+              );
+              pdf.rect(x, y, width, height, 'F');
+              pdf.setDrawColor(200, 200, 200);
+              pdf.rect(x, y, width, height, 'S');
+            }
+          }
+        },
+      });
+      
+      const finalY = pdf.lastAutoTable.finalY + 8;
+      pdf.setFontSize(8);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(100, 100, 100);
+      pdf.text(`Pantone TCX Library • ${result.library_size || '2,000+'} colors • Delta-E CIE2000`, 20, finalY);
+      pdf.text(`Generated: ${new Date().toLocaleString()}`, 20, finalY + 5);
+      
+      pdf.setFontSize(8);
+      pdf.setTextColor(150, 150, 150);
+      pdf.text('1', pdf.internal.pageSize.getWidth() / 2, pdf.internal.pageSize.getHeight() - 10, { align: 'center' });
+      
+      pdf.save(`Pantone_Report_${new Date().toISOString().split('T')[0]}.pdf`);
+      toast.success('PDF report generated!', { id: 'pdf-gen' });
+      
+    } catch (error) {
+      console.error('PDF error:', error);
+      toast.error('Failed to generate PDF', { id: 'pdf-gen' });
+    }
+  }
 
   return (
     <div>
@@ -467,9 +549,9 @@ export function PantoneIdentificationPage() {
             </button>
 
             {result && (
-              <button onClick={downloadReport}
+              <button onClick={downloadPantonePDF}
                 className="w-full py-2 border border-gray-200 rounded-xl text-sm font-medium hover:bg-gray-50 flex items-center justify-center gap-2">
-                <Download size={14} /> Download Report (JSON)
+                <Download size={14} /> Download PDF Report
               </button>
             )}
           </div>
@@ -606,7 +688,6 @@ export function TrialComparisonPage() {
         colorThreshold, minAccuracyForGo, wasteUnitCost, wasteRunSize
       );
       
-      // Store result in localStorage for the results page
       localStorage.setItem(`prepress_${result.job_id}`, JSON.stringify(result));
       
       toast.success(`Decision: ${result.decision}`, { id: 'comparison' });
@@ -780,7 +861,7 @@ export function TrialComparisonPage() {
 }
 
 // ============================================================
-// PREPRESS RESULT PAGE (100% Frontend)
+// PREPRESS RESULT PAGE (100% Frontend) with PDF Download
 // ============================================================
 
 export function PrepressResultPage() {
@@ -808,6 +889,162 @@ export function PrepressResultPage() {
     }
     loadJob();
   }, [jobId]);
+
+  async function downloadPrepressPDF() {
+    if (!job) {
+      toast.error('No data to generate PDF');
+      return;
+    }
+
+    toast.loading('Generating PDF report...', { id: 'pdf-gen' });
+    
+    try {
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4'
+      });
+
+      const decision = job.decision || 'UNKNOWN';
+      const isPass = decision === 'GO';
+      const avgAccuracy = job.accuracy_score || 0;
+      const trials = job.trial_reports || [];
+      const jobDate = new Date().toLocaleString();
+
+      // Black bar header
+      pdf.setFillColor(13, 27, 42);
+      pdf.rect(0, 0, pdf.internal.pageSize.getWidth(), 14, 'F');
+      pdf.setFontSize(9);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(255, 255, 255);
+      pdf.text('GREENPACK PRO — PREPRESS INSPECTION REPORT', pdf.internal.pageSize.getWidth() / 2, 9, { align: 'center' });
+      
+      // Score & status in light grey box
+      const scoreText = `${Math.round(avgAccuracy)}`;
+      const statusText = decision === 'GO' ? 'GO' : decision === 'HOLD' ? 'HOLD' : 'NO-GO';
+      
+      pdf.setFontSize(42);
+      pdf.setFont('helvetica', 'bold');
+      const scoreWidth = pdf.getTextWidth(scoreText);
+      pdf.setFontSize(20);
+      const statusWidth = pdf.getTextWidth(statusText);
+      
+      const gap = 12;
+      const boxPaddingX = 12;
+      const boxHeight = 28;
+      const boxWidth = scoreWidth + gap + statusWidth + (boxPaddingX * 2);
+      const boxX = (pdf.internal.pageSize.getWidth() - boxWidth) / 2;
+      const boxY = 28;
+      
+      pdf.setDrawColor(200, 200, 200);
+      pdf.setFillColor(249, 250, 251);
+      pdf.roundedRect(boxX, boxY, boxWidth, boxHeight, 4, 4, 'FD');
+      
+      const scoreColor = decision === 'GO' ? [34, 160, 107] : decision === 'HOLD' ? [244, 162, 45] : [229, 56, 59];
+      
+      pdf.setFontSize(42);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(scoreColor[0], scoreColor[1], scoreColor[2]);
+      pdf.text(scoreText, boxX + boxPaddingX, boxY + 18);
+      
+      pdf.setFontSize(20);
+      pdf.setTextColor(scoreColor[0], scoreColor[1], scoreColor[2]);
+      pdf.text(statusText, boxX + boxPaddingX + scoreWidth + gap, boxY + 18);
+      
+      // Subtitle
+      pdf.setFontSize(9);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(120, 120, 120);
+      pdf.text(`${job.jobRef} - Trial vs Final Comparison`, pdf.internal.pageSize.getWidth() / 2, boxY + boxHeight + 10, { align: 'center' });
+      
+      // Summary table
+      const tableData = [
+        ['Job Reference', job.jobRef, 'Date', jobDate],
+        ['Trials Inspected', `${trials.length}`, 'Decision', decision],
+        ['Overall Accuracy', `${avgAccuracy.toFixed(1)}%`, 'Waste Savings', job.waste_savings_usd > 0 ? `$${job.waste_savings_usd.toFixed(0)}` : '—']
+      ];
+      
+      autoTable(pdf, {
+        startY: boxY + boxHeight + 20,
+        body: tableData,
+        theme: 'plain',
+        styles: {
+          fontSize: 8,
+          cellPadding: { top: 2.5, bottom: 2.5, left: 2, right: 2 },
+          lineColor: [220, 220, 220],
+          lineWidth: 0.1,
+        },
+        columnStyles: {
+          0: { fontStyle: 'bold', textColor: [100, 100, 100], cellWidth: 40, halign: 'center' },
+          1: { fontStyle: 'bold', textColor: [13, 27, 42], cellWidth: 50, halign: 'center' },
+          2: { fontStyle: 'bold', textColor: [100, 100, 100], cellWidth: 40, halign: 'center' },
+          3: { fontStyle: 'bold', textColor: [13, 27, 42], cellWidth: 50, halign: 'center' }
+        },
+        margin: { left: 20, right: 20 },
+        alternateRowStyles: { fillColor: [249, 250, 251] },
+      });
+      
+      // Page 2 - Trial details
+      pdf.addPage();
+      
+      pdf.setFillColor(13, 27, 42);
+      pdf.rect(0, 0, pdf.internal.pageSize.getWidth(), 14, 'F');
+      pdf.setFontSize(9);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(255, 255, 255);
+      pdf.text('GREENPACK PRO — PREPRESS INSPECTION REPORT', pdf.internal.pageSize.getWidth() / 2, 9, { align: 'center' });
+      
+      pdf.setFontSize(12);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(0, 0, 0);
+      pdf.text('Trial Details', pdf.internal.pageSize.getWidth() / 2, 32, { align: 'center' });
+      
+      const trialData = trials.map((t: any) => [
+        `Trial ${t.trial_idx}`,
+        `${t.accuracy_score?.toFixed(1)}%`,
+        t.passed ? 'PASS' : 'FAIL',
+        `${t.scores?.text || 0}/100`,
+        `${t.scores?.color || 0}/100`,
+        t.defect_count || 0
+      ]);
+      
+      autoTable(pdf, {
+        startY: 40,
+        head: [['Trial', 'Accuracy', 'Status', 'Text', 'Color', 'Defects']],
+        body: trialData,
+        theme: 'striped',
+        styles: {
+          fontSize: 8,
+          cellPadding: { top: 2.5, bottom: 2.5, left: 2, right: 2 },
+          halign: 'center',
+        },
+        headStyles: {
+          fillColor: [13, 27, 42],
+          textColor: [255, 255, 255],
+          fontSize: 8,
+          fontStyle: 'bold',
+        },
+        alternateRowStyles: { fillColor: [249, 250, 251] },
+        margin: { left: 20, right: 20 },
+      });
+      
+      // Page numbers
+      const pageCount = pdf.internal.getNumberOfPages();
+      for (let i = 1; i <= pageCount; i++) {
+        pdf.setPage(i);
+        pdf.setFontSize(8);
+        pdf.setTextColor(150, 150, 150);
+        pdf.text(`${i}`, pdf.internal.pageSize.getWidth() / 2, pdf.internal.pageSize.getHeight() - 10, { align: 'center' });
+      }
+      
+      pdf.save(`Prepress_${job.jobRef}_Report_${new Date().toISOString().split('T')[0]}.pdf`);
+      toast.success('PDF report generated!', { id: 'pdf-gen' });
+      
+    } catch (error) {
+      console.error('PDF error:', error);
+      toast.error('Failed to generate PDF', { id: 'pdf-gen' });
+    }
+  }
 
   if (loading) {
     return <div className="flex items-center justify-center h-full"><Spinner size={32} /></div>;
@@ -850,6 +1087,12 @@ export function PrepressResultPage() {
               Prepress comparison • {trials.length} trials inspected
             </p>
           </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={downloadPrepressPDF}
+            className="flex items-center gap-1.5 px-3 py-2 bg-[#1A73E8] text-white rounded-lg text-sm hover:bg-blue-700">
+            <Download size={14} /> Download PDF Report
+          </button>
         </div>
       </div>
 
