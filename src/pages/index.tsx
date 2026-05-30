@@ -805,69 +805,154 @@ export function NewInspectionPage() {
     };
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    
-    if (!masterFile || !scanFile) {
-      toast.error('Please upload both master and scan images');
-      return;
-    }
-    
-    setLoading(true);
-    toast.loading('Analyzing label with frontend OCR...', { id: 'analysis' });
-    
-    try {
-      // Run frontend-only analysis
-      const result = await analyzeImagesLocally(masterFile, scanFile, colorThreshold, ssimThreshold);
-      
-      console.log('Analysis result:', result);
-      
-      // Create job data for Firebase
-      const jobData = {
-        jobNumber,
-        customerName,
-        productType,
-        quantity: 1,
-        status: 'completed',
-        dueDate: new Date(),
-        specifications: {
-          masterFileName: masterFile.name,
-          scanFileName: scanFile.name,
-          masterFileSize: masterFile.size,
-          scanFileSize: scanFile.size,
-          colorThreshold,
-          ssimThreshold
-        },
-        createdBy: auth.currentUser?.uid || 'unknown',
-        createdAt: new Date(),
-        overall_score: result.overall_score,
-        pass_fail: result.overall_score >= 75,
-        ocr_score: result.ocr_score,
-        color_score: result.color_score,
-        ssim_score: result.ssim_score,
-        barcode_score: result.barcode_score,
-        alignment_confidence: result.alignment_confidence,
-        ocr_errors: result.ocr_errors,
-        defects: result.defects,
-        master_text: result.master_text,
-        scan_text: result.scan_text,
-        similarity: result.similarity
+  // Helper function to convert File to Base64 (add this inside NewInspectionPage component)
+const fileToBase64 = (file: File): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = (error) => reject(error);
+  });
+};
+// Compress image before storing as Base64
+const compressImage = (file: File, maxWidth = 800, quality = 0.7): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+        
+        // Scale down if too large
+        if (width > maxWidth) {
+          height = (height * maxWidth) / width;
+          width = maxWidth;
+        }
+        
+        canvas.width = width;
+        canvas.height = height;
+        
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0, width, height);
+        
+        // Compress and convert to Base64
+        const compressedBase64 = canvas.toDataURL('image/jpeg', quality);
+        resolve(compressedBase64);
       };
-      
-      // Save to Firebase
-      const jobId = await jobService.createJob(jobData);
-      
-      toast.success(`Analysis complete! Score: ${result.overall_score}%`, { id: 'analysis' });
-      navigate(`/jobs/${jobId}/result`);
-      
-    } catch (err: any) {
-      console.error('Analysis error:', err);
-      toast.error(err.message || 'Failed to analyze images', { id: 'analysis' });
-    } finally {
-      setLoading(false);
-    }
-  }
+      img.onerror = reject;
+    };
+    reader.onerror = reject;
+  });
+};
 
+// Store in LocalStorage
+const storeImagesInLocalStorage = (jobId: string, masterBase64: string, scanBase64: string) => {
+  try {
+    localStorage.setItem(`job_${jobId}_master`, masterBase64);
+    localStorage.setItem(`job_${jobId}_scan`, scanBase64);
+    console.log('Images stored in LocalStorage');
+  } catch (error) {
+    console.error('LocalStorage quota error:', error);
+    // If quota exceeded, compress more aggressively
+    return false;
+  }
+  return true;
+};
+
+// Retrieve from LocalStorage
+const getImagesFromLocalStorage = (jobId: string) => {
+  const masterBase64 = localStorage.getItem(`job_${jobId}_master`);
+  const scanBase64 = localStorage.getItem(`job_${jobId}_scan`);
+  return { masterBase64, scanBase64 };
+};
+async function handleSubmit(e: React.FormEvent) {
+  e.preventDefault();
+  
+  if (!masterFile || !scanFile) {
+    toast.error('Please upload both master and scan images');
+    return;
+  }
+  
+  setLoading(true);
+  toast.loading('Analyzing label with frontend OCR...', { id: 'analysis' });
+  
+  try {
+    // Run frontend-only analysis
+    const result = await analyzeImagesLocally(masterFile, scanFile, colorThreshold, ssimThreshold);
+    
+    console.log('Analysis result:', result);
+    
+    // Compress images to Base64 (reduced size)
+    const masterBase64 = await compressImage(masterFile, 600, 0.6);
+    const scanBase64 = await compressImage(scanFile, 600, 0.6);
+    
+    console.log(`Master size: ${(masterBase64.length / 1024).toFixed(2)} KB`);
+    console.log(`Scan size: ${(scanBase64.length / 1024).toFixed(2)} KB`);
+    
+    // Create a unique ID for this job
+    const uniqueId = `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    // Store images in LocalStorage with compression
+    const stored = storeImagesInLocalStorage(uniqueId, masterBase64, scanBase64);
+    
+    if (!stored) {
+      // If still too large, compress more aggressively
+      const smallerMaster = await compressImage(masterFile, 400, 0.5);
+      const smallerScan = await compressImage(scanFile, 400, 0.5);
+      storeImagesInLocalStorage(uniqueId, smallerMaster, smallerScan);
+    }
+    
+    // Create job data for Firebase (store reference ID, not the images)
+    const jobData = {
+      jobNumber,
+      customerName,
+      productType,
+      quantity: 1,
+      status: 'completed',
+      dueDate: new Date(),
+      specifications: {
+        masterFileName: masterFile.name,
+        scanFileName: scanFile.name,
+        masterFileSize: masterFile.size,
+        scanFileSize: scanFile.size,
+        colorThreshold,
+        ssimThreshold
+      },
+      createdBy: auth.currentUser?.uid || 'unknown',
+      createdAt: new Date(),
+      overall_score: result.overall_score,
+      pass_fail: result.overall_score >= 75,
+      ocr_score: result.ocr_score,
+      color_score: result.color_score,
+      ssim_score: result.ssim_score,
+      barcode_score: result.barcode_score,
+      alignment_confidence: result.alignment_confidence,
+      ocr_errors: result.ocr_errors,
+      defects: result.defects,
+      master_text: result.master_text,
+      scan_text: result.scan_text,
+      similarity: result.similarity,
+      // Store the LocalStorage key reference
+      imageStorageKey: uniqueId
+    };
+    
+    // Save to Firebase
+    const jobId = await jobService.createJob(jobData);
+    
+    toast.success(`Analysis complete! Score: ${result.overall_score}%`, { id: 'analysis' });
+    navigate(`/jobs/${jobId}/result`);
+    
+  } catch (err: any) {
+    console.error('Analysis error:', err);
+    toast.error(err.message || 'Failed to analyze images', { id: 'analysis' });
+  } finally {
+    setLoading(false);
+  }
+}
   function DropZone({ onFileSelect, file, onClear, label, icon }: any) {
     const fileInputRef = useRef<HTMLInputElement>(null);
     
@@ -1068,6 +1153,10 @@ export function ResultPage() {
   const [job, setJob] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [masterImageUrl, setMasterImageUrl] = useState<string | null>(null);
+  const [scanImageUrl, setScanImageUrl] = useState<string | null>(null);
+  const [diffImageUrl, setDiffImageUrl] = useState<string | null>(null);
+  const [differenceCount, setDifferenceCount] = useState(0);
 
   useEffect(() => {
     async function loadJob() {
@@ -1076,6 +1165,22 @@ export function ResultPage() {
         const jobData = await jobService.getJobById(jobId);
         setJob(jobData);
         setIsProcessing(jobData.status === 'processing' || jobData.status === 'pending');
+        
+        // Load images from LocalStorage using the stored key
+        if (jobData.imageStorageKey) {
+          const { masterBase64, scanBase64 } = loadImagesFromLocalStorage(jobData.imageStorageKey);
+          
+          if (masterBase64) {
+            setMasterImageUrl(masterBase64);
+          }
+          if (scanBase64) {
+            setScanImageUrl(scanBase64);
+            if (masterBase64) {
+              const diff = await generateDiffImage(masterBase64, scanBase64);
+              setDiffImageUrl(diff);
+            }
+          }
+        }
         
         if (jobData.status === 'processing' || jobData.status === 'pending') {
           setTimeout(async () => {
@@ -1094,202 +1199,293 @@ export function ResultPage() {
     loadJob();
   }, [jobId]);
 
-  // ============================================================
-  // PDF GENERATION WITH BLACK BAR HEADER + 4x4 TABLE
-  // ============================================================
-  // ============================================================
-// PDF WITH SCORE & STATUS IN LIGHT GREY BORDER BOX
-// ============================================================
+  // Load images from LocalStorage
+  const loadImagesFromLocalStorage = (storageKey: string) => {
+    const masterBase64 = localStorage.getItem(`job_${storageKey}_master`);
+    const scanBase64 = localStorage.getItem(`job_${storageKey}_scan`);
+    return { masterBase64, scanBase64 };
+  };
 
-async function downloadPDF() {
-  if (!job) {
-    toast.error('No data to generate PDF');
-    return;
-  }
-
-  toast.loading('Generating PDF report...', { id: 'pdf-gen' });
-  
-  try {
-    const pdf = new jsPDF({
-      orientation: 'portrait',
-      unit: 'mm',
-      format: 'a4'
-    });
-
-    // Real job data
-    const score = job.overall_score || 89;
-    const isPass = score >= 75;
-    const productName = job.productType || 'Inspection Report';
-    const jobDate = job.createdAt ? new Date(job.createdAt).toLocaleString() : new Date().toLocaleString();
-    
-    // Metrics
-    const alignmentConf = ((job.alignment_confidence || 0.947) * 100).toFixed(0);
-    const ssimSimilarity = ((job.ssim_score || 0.894) * 100).toFixed(1);
-    const differencesFound = job.defects?.length || job.ocr_errors?.length || 90;
-    const meanColorDelta = (job.color_diff_avg || 4.646).toFixed(3);
-    const colorZonesFailing = job.failing_zones || 11;
-    const mottlingQuality = (job.mottling_score || 100.0).toFixed(1);
-    const bandingDetected = job.banding_detected ? 'True' : 'False';
-    
-    // ===== BLACK BAR HEADER =====
-    pdf.setFillColor(13, 27, 42);
-    pdf.rect(0, 0, pdf.internal.pageSize.getWidth(), 14, 'F');
-    pdf.setFontSize(9);
-    pdf.setFont('helvetica', 'bold');
-    pdf.setTextColor(255, 255, 255);
-    pdf.text('GREENPACK PRO — INSPECTION REPORT', pdf.internal.pageSize.getWidth() / 2, 9, { align: 'center' });
-    
-    // ===== LIGHT GREY BORDER BOX FOR SCORE & STATUS =====
-    const scoreText = `${Math.round(score)}`;
-    const statusText = isPass ? 'PASS' : 'REVIEW REQUIRED';
-    
-    // Calculate text widths
-    pdf.setFontSize(42);
-    pdf.setFont('helvetica', 'bold');
-    const scoreWidth = pdf.getTextWidth(scoreText);
-    pdf.setFontSize(20);
-    const statusWidth = pdf.getTextWidth(statusText);
-    
-    // Box dimensions
-    const gap = 12;  // Horizontal distance between score and status
-    const boxPaddingX = 12;  // Padding left and right inside box
-    const boxPaddingY = 8;    // Padding top and bottom inside box
-    const boxWidth = scoreWidth + gap + statusWidth + (boxPaddingX * 2);
-    const boxHeight = 28;  // Fixed height for the box
-    
-    // Center the box horizontally
-    const boxX = (pdf.internal.pageSize.getWidth() - boxWidth) / 2;
-    const boxY = 28;  // Top Y position of box
-    
-    // Draw light grey border box
-    pdf.setDrawColor(200, 200, 200);
-    pdf.setFillColor(249, 250, 251);
-    pdf.roundedRect(boxX, boxY, boxWidth, boxHeight, 4, 4, 'FD');
-    
-    // Score inside box
-    pdf.setFontSize(42);
-    pdf.setFont('helvetica', 'bold');
-    pdf.setTextColor(isPass ? 34 : 229, isPass ? 160 : 56, isPass ? 107 : 59);
-    pdf.text(scoreText, boxX + boxPaddingX, boxY + boxPaddingY + 16);
-    
-    // Status inside box (with horizontal gap)
-    pdf.setFontSize(20);
-    pdf.setFont('helvetica', 'bold');
-    pdf.setTextColor(isPass ? 34 : 229, isPass ? 160 : 56, isPass ? 107 : 59);
-    pdf.text(statusText, boxX + boxPaddingX + scoreWidth + gap, boxY + boxPaddingY + 16);
-    
-    // ===== SUBTITLE BELOW =====
-    pdf.setFontSize(9);
-    pdf.setFont('helvetica', 'normal');
-    pdf.setTextColor(120, 120, 120);
-    pdf.text(`${productName} - Master vs Printed Sample`, pdf.internal.pageSize.getWidth() / 2, boxY + boxHeight + 10, { align: 'center' });
-    
-    // ===== 4x4 COMPACT TABLE =====
-    const tableData = [
-      ['Date', jobDate, 'Alignment Confidence', `${alignmentConf}%`],
-      ['SSIM Similarity', `${ssimSimilarity}%`, 'Differences Found', differencesFound],
-      ['Mean Color ΔE', meanColorDelta, 'Color Zones Failing', `${colorZonesFailing}/12`],
-      ['Mottling Quality', `${mottlingQuality}/100`, 'Banding Detected', bandingDetected]
-    ];
-    
-    autoTable(pdf, {
-      startY: boxY + boxHeight + 20,
-      body: tableData,
-      theme: 'plain',
-      styles: {
-        fontSize: 8,
-        cellPadding: { top: 2.5, bottom: 2.5, left: 2, right: 2 },
-        lineColor: [220, 220, 220],
-        lineWidth: 0.1,
-      },
-      columnStyles: {
-        0: { fontStyle: 'bold', textColor: [100, 100, 100], cellWidth: 45, halign: 'center' },
-        1: { fontStyle: 'bold', textColor: [13, 27, 42], cellWidth: 45, halign: 'center' },
-        2: { fontStyle: 'bold', textColor: [100, 100, 100], cellWidth: 50, halign: 'center' },
-        3: { fontStyle: 'bold', textColor: [13, 27, 42], cellWidth: 45, halign: 'center' }
-      },
-      margin: { left: 20, right: 20 },
-      alternateRowStyles: { fillColor: [249, 250, 251] },
-    });
-    
-    // ===== PAGE 2 - DIFFERENCES =====
-    pdf.addPage();
-    
-    // Black bar page 2
-    pdf.setFillColor(13, 27, 42);
-    pdf.rect(0, 0, pdf.internal.pageSize.getWidth(), 14, 'F');
-    pdf.setFontSize(9);
-    pdf.setFont('helvetica', 'bold');
-    pdf.setTextColor(255, 255, 255);
-    pdf.text('GREENPACK PRO — INSPECTION REPORT', pdf.internal.pageSize.getWidth() / 2, 9, { align: 'center' });
-    
-    pdf.setFontSize(12);
-    pdf.setFont('helvetica', 'bold');
-    pdf.setTextColor(0, 0, 0);
-    pdf.text('Real Differences Detected', pdf.internal.pageSize.getWidth() / 2, 32, { align: 'center' });
-    
-    pdf.setFontSize(8);
-    pdf.setFont('helvetica', 'normal');
-    pdf.setTextColor(70, 70, 70);
-    
-    // Build differences
-    let differencesList = [];
-    if (job.defects && job.defects.length > 0) {
-      differencesList = job.defects.map((d, idx) => `${idx + 1}. ${d.description || d.type}`);
-    } else if (job.ocr_errors && job.ocr_errors.length > 0) {
-      differencesList = job.ocr_errors.map((e, idx) => `${idx + 1}. ${e.description || e.type}`);
-    } else {
-      if (job.ssim_score && job.ssim_score < 0.92) {
-        differencesList.push(`1. Sample shows rotational skew and edge crop (phone-scanner artifact).`);
-        differencesList.push(`2. Right-side white box region near recycle symbols differs.`);
-        if (job.color_score && job.color_score < 80) {
-          differencesList.push(`3. Minor color variance (mean ΔE ${meanColorDelta}).`);
+  // Generate difference image with highlighted areas
+  const generateDiffImage = async (masterBase64: string, scanBase64: string): Promise<string> => {
+    return new Promise((resolve) => {
+      const masterImg = new Image();
+      const scanImg = new Image();
+      let loadedCount = 0;
+      
+      const checkAndGenerate = () => {
+        loadedCount++;
+        if (loadedCount === 2) {
+          try {
+            const width = Math.min(scanImg.width, 500);
+            const height = (scanImg.height / scanImg.width) * width;
+            
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            
+            if (!ctx) {
+              resolve(scanBase64);
+              return;
+            }
+            
+            ctx.drawImage(scanImg, 0, 0, width, height);
+            
+            const masterCanvas = document.createElement('canvas');
+            masterCanvas.width = width;
+            masterCanvas.height = height;
+            const masterCtx = masterCanvas.getContext('2d');
+            masterCtx?.drawImage(masterImg, 0, 0, width, height);
+            const masterData = masterCtx?.getImageData(0, 0, width, height);
+            const scanData = ctx.getImageData(0, 0, width, height);
+            
+            if (masterData) {
+              const diffThreshold = 50;
+              const diffPixels: { x: number; y: number }[] = [];
+              
+              for (let y = 0; y < height; y += 3) {
+                for (let x = 0; x < width; x += 3) {
+                  const idx = (y * width + x) * 4;
+                  const rDiff = Math.abs(masterData.data[idx] - scanData.data[idx]);
+                  const gDiff = Math.abs(masterData.data[idx + 1] - scanData.data[idx + 1]);
+                  const bDiff = Math.abs(masterData.data[idx + 2] - scanData.data[idx + 2]);
+                  
+                  if (rDiff + gDiff + bDiff > diffThreshold) {
+                    diffPixels.push({ x, y });
+                  }
+                }
+              }
+              
+              setDifferenceCount(diffPixels.length);
+              
+              const groupedBoxes: { x: number; y: number; w: number; h: number }[] = [];
+              const used = new Set();
+              
+              for (const p of diffPixels) {
+                const key = `${Math.floor(p.x / 30)},${Math.floor(p.y / 30)}`;
+                if (used.has(key)) continue;
+                used.add(key);
+                
+                let minX = p.x, maxX = p.x, minY = p.y, maxY = p.y;
+                for (const other of diffPixels) {
+                  if (Math.abs(other.x - p.x) < 50 && Math.abs(other.y - p.y) < 50) {
+                    minX = Math.min(minX, other.x);
+                    maxX = Math.max(maxX, other.x);
+                    minY = Math.min(minY, other.y);
+                    maxY = Math.max(maxY, other.y);
+                  }
+                }
+                
+                const w = maxX - minX + 12;
+                const h = maxY - minY + 12;
+                if (w * h > 200) {
+                  groupedBoxes.push({ 
+                    x: Math.max(0, minX - 4), 
+                    y: Math.max(0, minY - 4), 
+                    w: w + 8, 
+                    h: h + 8 
+                  });
+                }
+              }
+              
+              for (const box of groupedBoxes) {
+                ctx.strokeStyle = '#FF0000';
+                ctx.lineWidth = 3;
+                ctx.strokeRect(box.x, box.y, box.w, box.h);
+                ctx.fillStyle = 'rgba(255, 0, 0, 0.25)';
+                ctx.fillRect(box.x, box.y, box.w, box.h);
+              }
+              
+              ctx.font = 'bold 16px Arial';
+              ctx.fillStyle = '#FF0000';
+              ctx.fillText(`${groupedBoxes.length} difference(s)`, 10, 30);
+            }
+            
+            resolve(canvas.toDataURL('image/jpeg', 0.8));
+          } catch (err) {
+            console.error('Error generating diff:', err);
+            resolve(scanBase64);
+          }
         }
-        if (bandingDetected === 'True') {
-          differencesList.push(`4. Banding detected — recommend re-scan with flatbed.`);
-        }
-      } else if (job.color_score && job.color_score < 80) {
-        differencesList.push(`1. Color mismatch: ${meanColorDelta} ΔE exceeds tolerance.`);
-      } else {
-        differencesList.push(`1. No significant defects — label meets quality standards.`);
-      }
+      };
+      
+      masterImg.onload = checkAndGenerate;
+      scanImg.onload = checkAndGenerate;
+      masterImg.onerror = () => resolve(scanBase64);
+      scanImg.onerror = () => resolve(scanBase64);
+      
+      masterImg.src = masterBase64;
+      scanImg.src = scanBase64;
+    });
+  };
+
+  // ============================================================
+  // PDF GENERATION - IMAGES AT THE BOTTOM
+  // ============================================================
+  async function downloadPDF() {
+    if (!job) {
+      toast.error('No data to generate PDF');
+      return;
     }
+
+    toast.loading('Generating PDF report...', { id: 'pdf-gen' });
     
-    let yPos = 45;
-    for (const diff of differencesList) {
-      const splitText = pdf.splitTextToSize(diff, 170);
-      pdf.text(splitText, 20, yPos);
-      yPos += (splitText.length * 4) + 1.5;
-      if (yPos > 270) { pdf.addPage(); yPos = 25; }
-    }
-    
-    // Page numbers
-    const pageCount = pdf.internal.getNumberOfPages();
-    for (let i = 1; i <= pageCount; i++) {
-      pdf.setPage(i);
+    try {
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4'
+      });
+
+      const score = job.overall_score || 89;
+      const isPass = score >= 75;
+      const productName = job.productType || 'Inspection Report';
+      const jobDate = job.createdAt ? new Date(job.createdAt).toLocaleString() : new Date().toLocaleString();
+      
+      const alignmentConf = ((job.alignment_confidence || 0.947) * 100).toFixed(0);
+      const ssimSimilarity = ((job.ssim_score || 0.894) * 100).toFixed(1);
+      const differencesFound = job.defects?.length || job.ocr_errors?.length || differenceCount || 90;
+      const meanColorDelta = (job.color_diff_avg || 4.646).toFixed(3);
+      const colorZonesFailing = job.failing_zones || 11;
+      const mottlingQuality = (job.mottling_score || 100.0).toFixed(1);
+      const bandingDetected = job.banding_detected ? 'True' : 'False';
+      
+      // BLACK BAR HEADER
+      pdf.setFillColor(13, 27, 42);
+      pdf.rect(0, 0, pdf.internal.pageSize.getWidth(), 12, 'F');
+      pdf.setFontSize(9);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(255, 255, 255);
+      pdf.text('GREENPACK PRO — INSPECTION REPORT', pdf.internal.pageSize.getWidth() / 2, 8, { align: 'center' });
+      
+      // SCORE & STATUS BOX
+      const scoreText = `${Math.round(score)}`;
+      const statusText = isPass ? 'PASS' : 'REVIEW REQUIRED';
+      
+      pdf.setFontSize(32);
+      pdf.setFont('helvetica', 'bold');
+      const scoreWidth = pdf.getTextWidth(scoreText);
+      pdf.setFontSize(18);
+      const statusWidth = pdf.getTextWidth(statusText);
+      
+      const gap = 10;
+      const boxPaddingX = 10;
+      const boxPaddingY = 5;
+      const boxWidth = scoreWidth + gap + statusWidth + (boxPaddingX * 2);
+      const boxHeight = 22;
+      
+      const boxX = (pdf.internal.pageSize.getWidth() - boxWidth) / 2;
+      const boxY = 22;
+      
+      pdf.setDrawColor(200, 200, 200);
+      pdf.setFillColor(249, 250, 251);
+      pdf.roundedRect(boxX, boxY, boxWidth, boxHeight, 3, 3, 'FD');
+      
+      pdf.setFontSize(32);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(isPass ? 34 : 229, isPass ? 160 : 56, isPass ? 107 : 59);
+      pdf.text(scoreText, boxX + boxPaddingX, boxY + boxPaddingY + 14);
+      
+      pdf.setFontSize(18);
+      pdf.text(statusText, boxX + boxPaddingX + scoreWidth + gap, boxY + boxPaddingY + 14);
+      
       pdf.setFontSize(8);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(120, 120, 120);
+      pdf.text(`${productName} - Master vs Printed Sample`, pdf.internal.pageSize.getWidth() / 2, boxY + boxHeight + 8, { align: 'center' });
+      
+      // 4x4 TABLE
+      const tableData = [
+        ['Date', jobDate, 'Alignment Confidence', `${alignmentConf}%`],
+        ['SSIM Similarity', `${ssimSimilarity}%`, 'Differences Found', differencesFound],
+        ['Mean Color ΔE', meanColorDelta, 'Color Zones Failing', `${colorZonesFailing}/12`],
+        ['Mottling Quality', `${mottlingQuality}/100`, 'Banding Detected', bandingDetected]
+      ];
+      
+      autoTable(pdf, {
+        startY: boxY + boxHeight + 14,
+        body: tableData,
+        theme: 'plain',
+        styles: {
+          fontSize: 8,
+          cellPadding: { top: 3, bottom: 3, left: 3, right: 3 },
+          lineColor: [200, 200, 200],
+          lineWidth: 0.1,
+        },
+        columnStyles: {
+          0: { fontStyle: 'bold', textColor: [80, 80, 80], cellWidth: 45, halign: 'center' },
+          1: { fontStyle: 'bold', textColor: [13, 27, 42], cellWidth: 50, halign: 'center' },
+          2: { fontStyle: 'bold', textColor: [80, 80, 80], cellWidth: 50, halign: 'center' },
+          3: { fontStyle: 'bold', textColor: [13, 27, 42], cellWidth: 50, halign: 'center' }
+        },
+        margin: { left: 15, right: 15 },
+        alternateRowStyles: { fillColor: [249, 250, 251] },
+      });
+      
+      const tableEndY = (pdf as any).lastAutoTable.finalY + 8;
+      
+      // ===== IMAGES AT THE BOTTOM OF PDF =====
+      const imgToUse = diffImageUrl || scanImageUrl;
+      if (masterImageUrl && imgToUse && tableEndY < 180) {
+        try {
+          const masterImgData = await fetch(masterImageUrl).then(res => res.blob());
+          const diffImgData = await fetch(imgToUse).then(res => res.blob());
+          
+          const masterBase64 = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.readAsDataURL(masterImgData);
+          });
+          
+          const diffBase64 = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.readAsDataURL(diffImgData);
+          });
+          
+          const imgWidth = 70;
+          const imgHeight = 55;
+          const leftX = 25;
+          const rightX = pdf.internal.pageSize.getWidth() - 25 - imgWidth;
+          const imagesY = tableEndY;
+          
+          // Master image
+          pdf.addImage(masterBase64, 'JPEG', leftX, imagesY, imgWidth, imgHeight);
+          pdf.setFontSize(7);
+          pdf.setTextColor(100, 100, 100);
+          pdf.text('Master Label', leftX + imgWidth/2, imagesY + imgHeight + 3, { align: 'center' });
+          
+          // Scanned image with differences
+          pdf.addImage(diffBase64, 'JPEG', rightX, imagesY, imgWidth, imgHeight);
+          pdf.text('Printed Sample (Red = Differences)', rightX + imgWidth/2, imagesY + imgHeight + 3, { align: 'center' });
+          
+        } catch (err) {
+          console.warn('Could not embed images:', err);
+        }
+      }
+      
+      // Page number
+      pdf.setFontSize(7);
       pdf.setTextColor(150, 150, 150);
-      pdf.text(`${i}`, pdf.internal.pageSize.getWidth() / 2, pdf.internal.pageSize.getHeight() - 10, { align: 'center' });
+      pdf.text('1', pdf.internal.pageSize.getWidth() / 2, pdf.internal.pageSize.getHeight() - 8, { align: 'center' });
+      
+      pdf.save(`${productName.replace(/\s+/g, '_')}_Report_${new Date().toISOString().split('T')[0]}.pdf`);
+      toast.success('PDF report generated!', { id: 'pdf-gen' });
+      
+    } catch (error) {
+      console.error('PDF error:', error);
+      toast.error('Failed to generate PDF', { id: 'pdf-gen' });
     }
-    
-    pdf.save(`${productName.replace(/\s+/g, '_')}_Report_${new Date().toISOString().split('T')[0]}.pdf`);
-    toast.success('PDF report generated!', { id: 'pdf-gen' });
-    
-  } catch (error) {
-    console.error('PDF error:', error);
-    toast.error('Failed to generate PDF', { id: 'pdf-gen' });
   }
-}
 
   async function downloadExcel() {
     if (!job) return;
-    const headers = ['Job Number', 'Customer', 'Product', 'Overall Score', 'OCR Score', 'Color Score', 'SSIM Score', 'Mottling Quality', 'Banding Detected', 'Status', 'Date'];
+    const headers = ['Job Number', 'Customer', 'Product', 'Overall Score', 'OCR Score', 'Color Score', 'SSIM Score', 'Status', 'Date'];
     const row = [
       job.jobNumber, job.customerName, job.productType, 
       job.overall_score, job.ocr_score, job.color_score, 
       job.ssim_score ? (job.ssim_score * 100).toFixed(1) : '—',
-      job.mottling_score || '—',
-      job.banding_detected ? 'Yes' : 'No',
       job.pass_fail ? 'PASS' : 'FAIL', 
       job.createdAt ? new Date(job.createdAt).toLocaleString() : ''
     ];
@@ -1312,16 +1508,19 @@ async function downloadPDF() {
       printWindow.document.write(`
         <html><head><title>Inspection Report - ${job.jobNumber}</title>
         <style>
-          body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+          body { font-family: Arial, sans-serif; margin: 0; padding: 20px; max-width: 800px; margin: 0 auto; }
           .header-bar { background: #0D1B2A; color: white; padding: 12px 20px; font-weight: bold; margin-bottom: 20px; }
-          .score-row { display: flex; align-items: baseline; gap: 20px; margin: 20px 0 10px; }
+          .score-row { display: flex; align-items: baseline; gap: 20px; margin: 20px 0 10px; justify-content: center; }
           .score { font-size: 48px; font-weight: bold; color: ${isPass ? '#22A06B' : '#E5383B'}; }
           .status { font-size: 24px; font-weight: bold; }
-          .subtitle { color: #666; margin-bottom: 30px; }
+          .subtitle { color: #666; margin-bottom: 30px; text-align: center; }
+          .images-container { display: flex; gap: 20px; margin: 30px 0; flex-wrap: wrap; justify-content: center; }
+          .image-box { flex: 1; min-width: 250px; text-align: center; }
+          .image-box img { max-width: 100%; border: 1px solid #ddd; border-radius: 8px; }
+          .image-label { font-size: 12px; color: #666; margin-top: 5px; }
           table { width: 100%; border-collapse: collapse; margin: 15px 0; }
-          th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+          th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
           th { background: #f5f5f5; }
-          .diff-list li { margin: 8px 0; }
         </style></head>
         <body>
           <div class="header-bar">GREENPACK PRO — INSPECTION REPORT</div>
@@ -1331,20 +1530,23 @@ async function downloadPDF() {
           </div>
           <div class="subtitle">${job.productType || 'Product'} - Master vs Printed Sample</div>
           
-          <h3>Inspection Summary</h3>
           <table>
             <tr><th>Date</th><td>${job.createdAt ? new Date(job.createdAt).toLocaleString() : ''}</td><th>Alignment Confidence</th><td>${Math.round((job.alignment_confidence || 0) * 100)}%</td></tr>
-            <tr><th>SSIM Similarity</th><td>${((job.ssim_score || 0) * 100).toFixed(1)}%</td><th>Differences Found</th><td>${job.defects?.length || 0}</td></tr>
-            <tr><th>Mean Color ΔE</th><td>${(job.color_diff_avg || 4.65).toFixed(3)}</td><th>Color Zones Failing</th><td>${job.failing_zones || 11}/12</td></tr>
-            <tr><th>Mottling Quality</th><td>${job.mottling_score || 100.0}/100</td><th>Banding Detected</th><td>${job.banding_detected ? 'True' : 'False'}</td></tr>
+            <tr><th>SSIM Similarity</th><td>${((job.ssim_score || 0) * 100).toFixed(1)}%</td><th>Differences Found</th><td>${differenceCount || job.defects?.length || 0}</td></tr>
+            <tr><th>Mean Color ΔE</th><td>${(job.color_diff_avg || 4.65).toFixed(3)}</td><th>Status</th><td>${isPass ? 'PASS' : 'FAIL'}</td></tr>
           </table>
           
-          <h3>Real Differences Detected</h3>
-          <ul class="diff-list">
-            ${(job.defects?.length ? job.defects.map((d: any) => `<li>${d.description || d.type}</li>`) : 
-              (job.ocr_errors?.length ? job.ocr_errors.map((e: any) => `<li>${e.description || e.type}</li>`) :
-              ['<li>No significant differences detected - Label meets quality standards</li>'])).join('')}
-          </ul>
+          <div class="images-container">
+            <div class="image-box">
+              ${masterImageUrl ? `<img src="${masterImageUrl}" alt="Master Label" />` : '<p>No master image</p>'}
+              <div class="image-label">Master Label</div>
+            </div>
+            <div class="image-box">
+              ${diffImageUrl ? `<img src="${diffImageUrl}" alt="Printed Sample with Differences" />` : (scanImageUrl ? `<img src="${scanImageUrl}" alt="Printed Sample" />` : '<p>No scan image</p>')}
+              <div class="image-label">Printed Sample ${diffImageUrl ? '(Red boxes = differences)' : ''}</div>
+            </div>
+          </div>
+          
           <p style="margin-top: 40px; text-align: center; color: #666; font-size: 11px;">Generated by Greenpack Pro</p>
         </body></html>
       `);
@@ -1380,53 +1582,58 @@ async function downloadPDF() {
         }
       />
       
-      <div className="p-6 space-y-5 max-w-5xl mx-auto">
-        {/* Score Card - matches PDF layout */}
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
-          <div className="flex items-baseline gap-4">
-            <div className={`text-6xl font-bold ${isPass ? 'text-green-600' : 'text-red-500'}`}>
+      {/* REDUCED WIDTH: max-w-2xl (narrower than before) */}
+      <div className="p-4 space-y-4 max-w-2xl mx-auto">
+        {/* Score Card */}
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+          <div className="flex items-baseline gap-3">
+            <div className={`text-5xl font-bold ${isPass ? 'text-green-600' : 'text-red-500'}`}>
               {Math.round(score)}
             </div>
-            <div className={`text-2xl font-bold ${isPass ? 'text-green-600' : 'text-red-500'}`}>
+            <div className={`text-xl font-bold ${isPass ? 'text-green-600' : 'text-red-500'}`}>
               {isPass ? 'PASS' : 'REVIEW REQUIRED'}
             </div>
           </div>
-          <div className="text-sm text-gray-500 mt-2">{job.productType || 'Product'} - Master vs Printed Sample</div>
+          <div className="text-xs text-gray-500 mt-1">{job.productType || 'Product'} - Master vs Printed Sample</div>
         </div>
 
-        {/* 4x4 Table Layout - matches PDF exactly */}
+        {/* 4x4 Table - Compact */}
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-          <div className="px-4 py-2 bg-gray-50 border-b border-gray-100 font-semibold text-sm">
+          <div className="px-3 py-1.5 bg-gray-50 border-b border-gray-100 font-semibold text-xs">
             Inspection Summary
           </div>
-          <div className="p-4">
-            <table className="w-full text-sm">
+          <div className="p-3 overflow-x-auto">
+            <table className="w-full text-xs">
               <tbody>
                 <tr className="border-b border-gray-100">
-                  <td className="py-3 font-semibold text-gray-600 w-1/4">Date</td>
-                  <td className="py-3 text-[#0D1B2A] w-1/4">{job.createdAt ? new Date(job.createdAt).toLocaleString() : new Date().toLocaleString()}</td>
-                  <td className="py-3 font-semibold text-gray-600 w-1/4">Alignment Confidence</td>
-                  <td className="py-3 text-[#0D1B2A] w-1/4">{Math.round((job.alignment_confidence || 0.947) * 100)}%</td>
+                  <td className="py-2 font-semibold text-gray-600 w-1/4">Date</td>
+                  <td className="py-2 text-[#0D1B2A] w-1/4">{job.createdAt ? new Date(job.createdAt).toLocaleString() : new Date().toLocaleString()}</td>
+                  <td className="py-2 font-semibold text-gray-600 w-1/4">Alignment Confidence</td>
+                  <td className="py-2 text-[#0D1B2A] w-1/4">{Math.round((job.alignment_confidence || 0.947) * 100)}%</td>
                 </tr>
                 <tr className="border-b border-gray-100">
-                  <td className="py-3 font-semibold text-gray-600">SSIM Similarity</td>
-                  <td className="py-3 text-[#0D1B2A]">{((job.ssim_score || 0.894) * 100).toFixed(1)}%</td>
-                  <td className="py-3 font-semibold text-gray-600">Differences Found</td>
-                  <td className="py-3 text-[#0D1B2A]">{job.defects?.length || job.ocr_errors?.length || 90}</td>
+                  <td className="py-2 font-semibold text-gray-600">SSIM Similarity</td>
+                  <td className="py-2 text-[#0D1B2A]">{((job.ssim_score || 0.894) * 100).toFixed(1)}%</td>
+                  <td className="py-2 font-semibold text-gray-600">Differences Found</td>
+                  <td className="py-2 text-[#0D1B2A] font-medium text-red-600">{differenceCount || job.defects?.length || job.ocr_errors?.length || 0}</td>
                 </tr>
                 <tr className="border-b border-gray-100">
-                  <td className="py-3 font-semibold text-gray-600">Mean Color ΔE</td>
-                  <td className="py-3 text-[#0D1B2A]">{(job.color_diff_avg || 4.646).toFixed(3)}</td>
-                  <td className="py-3 font-semibold text-gray-600">Color Zones Failing</td>
-                  <td className="py-3 text-[#0D1B2A]">{job.failing_zones || 11}/12</td>
+                  <td className="py-2 font-semibold text-gray-600">OCR Score</td>
+                  <td className="py-2 text-[#0D1B2A]">{job.ocr_score || '—'}%</td>
+                  <td className="py-2 font-semibold text-gray-600">Color Score</td>
+                  <td className="py-2 text-[#0D1B2A]">{job.color_score || '—'}%</td>
                 </tr>
                 <tr>
-                  <td className="py-3 font-semibold text-gray-600">Mottling Quality</td>
-                  <td className="py-3 text-[#0D1B2A]">{(job.mottling_score || 100.0).toFixed(1)}/100</td>
-                  <td className="py-3 font-semibold text-gray-600">Banding Detected</td>
-                  <td className="py-3">
+                  <td className="py-2 font-semibold text-gray-600">Overall Status</td>
+                  <td className="py-2">
+                    <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-bold ${isPass ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                      {isPass ? '✓ PASS' : '✗ FAIL'}
+                    </span>
+                  </td>
+                  <td className="py-2 font-semibold text-gray-600">Banding Detected</td>
+                  <td className="py-2">
                     <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${job.banding_detected ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
-                      {job.banding_detected ? 'True' : 'False'}
+                      {job.banding_detected ? 'Yes' : 'No'}
                     </span>
                   </td>
                 </tr>
@@ -1437,69 +1644,90 @@ async function downloadPDF() {
 
         {/* Real Differences Detected */}
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-          <div className="px-4 py-2 bg-gray-50 border-b border-gray-100 font-semibold text-sm">
+          <div className="px-3 py-1.5 bg-gray-50 border-b border-gray-100 font-semibold text-xs">
             Real Differences Detected
           </div>
-          <div className="p-4">
-            <ol className="list-decimal list-inside space-y-2 text-sm text-gray-700">
-              {(job.defects?.length > 0 
-                ? job.defects.map((d: any, idx: number) => <li key={idx}>{d.description || d.type}</li>)
-                : (job.ocr_errors?.length > 0
-                  ? job.ocr_errors.map((e: any, idx: number) => <li key={idx}>{e.description || e.type}</li>)
-                  : (
-                    <>
-                      <li>Sample shows rotational skew and edge crop (phone-scanner artifact, not a print defect).</li>
-                      <li>Right-side white box region near recycle symbols differs in content/position.</li>
-                      {job.color_score && job.color_score < 80 && (
-                        <li>Minor color exposure variance between the two scans (mean ΔE {(job.color_diff_avg || 4.2).toFixed(1)}).</li>
-                      )}
-                      {job.banding_detected && (
-                        <li>Slight banding signature detected — likely scan compression, recommend re-scan with flatbed.</li>
-                      )}
-                      {(!job.color_score || job.color_score >= 80) && !job.banding_detected && (
-                        <li className="text-green-600">✓ No significant defects — label meets quality standards.</li>
-                      )}
-                    </>
-                  ))
+          <div className="p-3">
+            <ol className="list-decimal list-inside space-y-1 text-xs text-gray-700">
+              {differenceCount > 500 ? (
+                <>
+                  <li className="text-red-600 font-medium">⚠️ Significant differences detected between master and printed sample</li>
+                  <li>Sample shows possible rotational skew or scaling issues</li>
+                </>
+              ) : differenceCount > 100 ? (
+                <>
+                  <li>Minor pixel variations detected ({differenceCount} total differences)</li>
+                  <li>May be caused by lighting or scanning artifacts</li>
+                </>
+              ) : differenceCount > 0 ? (
+                <li>Very minor differences detected - label meets quality standards</li>
+              ) : (
+                <li className="text-green-600">✓ No significant differences detected - Label meets quality standards</li>
               )}
             </ol>
           </div>
         </div>
+
+        {/* Images at the BOTTOM of the page */}
+        {(masterImageUrl || scanImageUrl) && (
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+            <div className="px-3 py-1.5 bg-gray-50 border-b border-gray-100 font-semibold text-xs">
+              Image Comparison {diffImageUrl && <span className="text-red-500 ml-1">(Red boxes = differences)</span>}
+            </div>
+            <div className="p-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="text-center">
+                  {masterImageUrl ? (
+                    <img 
+                      src={masterImageUrl} 
+                      alt="Master Label" 
+                      className="w-full rounded-lg border border-gray-200 shadow-sm"
+                      style={{ maxHeight: '200px', objectFit: 'contain' }}
+                    />
+                  ) : (
+                    <div className="h-32 bg-gray-100 rounded-lg flex items-center justify-center text-gray-400 text-xs">
+                      No master image
+                    </div>
+                  )}
+                  <p className="text-xs text-gray-500 mt-1">📄 Master Label</p>
+                </div>
+                <div className="text-center">
+                  {diffImageUrl ? (
+                    <img 
+                      src={diffImageUrl} 
+                      alt="Printed Sample with Differences" 
+                      className="w-full rounded-lg border-2 border-red-200 shadow-sm"
+                      style={{ maxHeight: '200px', objectFit: 'contain' }}
+                    />
+                  ) : scanImageUrl ? (
+                    <img 
+                      src={scanImageUrl} 
+                      alt="Printed Sample" 
+                      className="w-full rounded-lg border border-gray-200 shadow-sm"
+                      style={{ maxHeight: '200px', objectFit: 'contain' }}
+                    />
+                  ) : (
+                    <div className="h-32 bg-gray-100 rounded-lg flex items-center justify-center text-gray-400 text-xs">
+                      No scan image
+                    </div>
+                  )}
+                  <p className="text-xs text-gray-500 mt-1">
+                    🔍 Printed Sample {diffImageUrl && <span className="text-red-600">(Differences highlighted)</span>}
+                  </p>
+                </div>
+              </div>
+              {differenceCount > 0 && (
+                <p className="text-center text-xs text-red-500 mt-2">
+                  ⚠️ {differenceCount} pixel differences detected
+                </p>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
 }
-
-function SummaryItem({ label, value, isBadge = false }: { label: string; value: any; isBadge?: boolean }) {
-  return (
-    <div className="flex justify-between items-center py-1.5 border-b border-gray-50">
-      <span className="text-xs text-gray-500">{label}</span>
-      {isBadge ? (
-        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${value === 'True' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
-          {value}
-        </span>
-      ) : (
-        <span className="text-sm font-semibold text-[#0D1B2A]">{value}</span>
-      )}
-    </div>
-  );
-}
-
-function ProcessingView({ job }: { job: any }) {
-  return (
-    <div>
-      <PageHeader title={`Inspection: ${job.jobNumber}`} subtitle="Processing..." />
-      <div className="flex flex-col items-center justify-center h-80 gap-4">
-        <Spinner size={40} />
-        <div className="text-center">
-          <h3 className="text-lg font-bold">Analyzing Label</h3>
-          <p className="text-sm text-gray-500">Running OCR, color analysis, and quality checks...</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 
 // ═══════════════════════════════════════════════════════════
 // JOBS LIST PAGE
