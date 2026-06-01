@@ -1074,7 +1074,7 @@ export function MultiUpResultPage() {
       alternateRowStyles: { fillColor: [249, 250, 251] },
     });
     
-    let currentY = pdf.lastAutoTable.finalY + 8;
+    let currentY = (pdf as any).lastAutoTable.finalY + 8;
     
     // Average Quality Metrics
     pdf.setFontSize(10);

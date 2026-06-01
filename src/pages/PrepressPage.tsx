@@ -431,7 +431,7 @@ export function PantoneIdentificationPage() {
         },
       });
       
-      const finalY = pdf.lastAutoTable.finalY + 8;
+      const finalY = (pdf as any).lastAutoTable.finalY + 8;
       pdf.setFontSize(8);
       pdf.setFont('helvetica', 'normal');
       pdf.setTextColor(100, 100, 100);
