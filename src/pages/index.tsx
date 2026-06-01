@@ -763,242 +763,273 @@ export function NewInspectionPage() {
     });
   }
 
-  async function analyzeImagesLocally(masterFile: File, scanFile: File, colorThreshold: number, ssimThreshold: number) {
-    console.log('🖼️ Loading images for frontend analysis...');
+async function analyzeImagesLocally(masterFile: File, scanFile: File, colorThreshold: number, ssimThreshold: number) {
+  console.log('🖼️ Loading images for frontend analysis...');
+  
+  const masterImg = await loadImage(masterFile);
+  const scanImg = await loadImage(scanFile);
+  
+  // Use the same dimensions for comparison (use scan dimensions)
+  const width = scanImg.width;
+  const height = scanImg.height;
+  
+  // Create canvases
+  const masterCanvas = document.createElement('canvas');
+  const scanCanvas = document.createElement('canvas');
+  masterCanvas.width = width;
+  masterCanvas.height = height;
+  scanCanvas.width = width;
+  scanCanvas.height = height;
+  
+  const masterCtx = masterCanvas.getContext('2d');
+  const scanCtx = scanCanvas.getContext('2d');
+  
+  if (!masterCtx || !scanCtx) throw new Error('Could not create canvas context');
+  
+  // Resize master to match scan dimensions
+  masterCtx.drawImage(masterImg, 0, 0, width, height);
+  scanCtx.drawImage(scanImg, 0, 0, width, height);
+  
+  const masterData = masterCtx.getImageData(0, 0, width, height);
+  const scanData = scanCtx.getImageData(0, 0, width, height);
+  
+  // ============================================================
+  // PANTONE COLOR ANALYSIS FOR MASTER AND SCAN
+  // ============================================================
+  console.log('🎨 Analyzing Pantone colors in master image...');
+  let masterPantoneColors: any[] = [];
+  let scanPantoneColors: any[] = [];
+  
+  try {
+    const masterBlob = await new Promise<Blob>((resolve) => {
+      masterCanvas.toBlob((blob) => resolve(blob!), 'image/jpeg', 0.9);
+    });
+    const scanBlob = await new Promise<Blob>((resolve) => {
+      scanCanvas.toBlob((blob) => resolve(blob!), 'image/jpeg', 0.9);
+    });
     
-    const masterImg = await loadImage(masterFile);
-    const scanImg = await loadImage(scanFile);
-    
-    // Use the same dimensions for comparison (use scan dimensions)
-    const width = scanImg.width;
-    const height = scanImg.height;
-    
-    // Create canvases
-    const masterCanvas = document.createElement('canvas');
-    const scanCanvas = document.createElement('canvas');
-    masterCanvas.width = width;
-    masterCanvas.height = height;
-    scanCanvas.width = width;
-    scanCanvas.height = height;
-    
-    const masterCtx = masterCanvas.getContext('2d');
-    const scanCtx = scanCanvas.getContext('2d');
-    
-    if (!masterCtx || !scanCtx) throw new Error('Could not create canvas context');
-    
-    // Resize master to match scan dimensions
-    masterCtx.drawImage(masterImg, 0, 0, width, height);
-    scanCtx.drawImage(scanImg, 0, 0, width, height);
-    
-    const masterData = masterCtx.getImageData(0, 0, width, height);
-    const scanData = scanCtx.getImageData(0, 0, width, height);
-    
-    // ============================================================
-    // PANTONE COLOR ANALYSIS FOR MASTER AND SCAN
-    // ============================================================
-    console.log('🎨 Analyzing Pantone colors in master image...');
-    let masterPantoneColors: any[] = [];
-    let scanPantoneColors: any[] = [];
-    
-    try {
-      // Convert canvas to blob for Pantone analysis
-      const masterBlob = await new Promise<Blob>((resolve) => {
-        masterCanvas.toBlob((blob) => resolve(blob!), 'image/jpeg', 0.9);
-      });
-      const scanBlob = await new Promise<Blob>((resolve) => {
-        scanCanvas.toBlob((blob) => resolve(blob!), 'image/jpeg', 0.9);
-      });
-      
-      const masterPantoneFile = new File([masterBlob], 'master-pantone.jpg', { type: 'image/jpeg' });
-const scanPantoneFile = new File([scanBlob], 'scan-pantone.jpg', { type: 'image/jpeg' });
+    const masterPantoneFile = new File([masterBlob], 'master-pantone.jpg', { type: 'image/jpeg' });
+    const scanPantoneFile = new File([scanBlob], 'scan-pantone.jpg', { type: 'image/jpeg' });
 
-const masterPantoneResult = await analyzePantoneColors(masterPantoneFile, 6, true, 3);
-const scanPantoneResult = await analyzePantoneColors(scanPantoneFile, 6, true, 3);
-      
-      masterPantoneColors = masterPantoneResult.extracted_colors || [];
-      scanPantoneColors = scanPantoneResult.extracted_colors || [];
-      
-      console.log(`🎨 Master Pantone colors: ${masterPantoneColors.length}`);
-      console.log(`🎨 Scan Pantone colors: ${scanPantoneColors.length}`);
-    } catch (pantoneError) {
-      console.warn('Pantone analysis failed, continuing without it:', pantoneError);
-    }
+    const masterPantoneResult = await analyzePantoneColors(masterPantoneFile, 6, true, 3);
+    const scanPantoneResult = await analyzePantoneColors(scanPantoneFile, 6, true, 3);
     
-    // Calculate color match accuracy between master and scan Pantone colors
-    let pantoneMatchScore = 85;
-    const pantoneComparisons: any[] = [];
+    masterPantoneColors = masterPantoneResult.extracted_colors || [];
+    scanPantoneColors = scanPantoneResult.extracted_colors || [];
     
-    for (const masterColor of masterPantoneColors) {
-      for (const scanColor of scanPantoneColors) {
-        const deltaDifference = Math.abs(masterColor.best_match_delta_e - scanColor.best_match_delta_e);
-        if (deltaDifference < 15) {
-          pantoneComparisons.push({
-            master_pms: masterColor.best_match_code,
-            master_hex: masterColor.hex,
-            master_delta_e: masterColor.best_match_delta_e,
-            scan_pms: scanColor.best_match_code,
-            scan_hex: scanColor.hex,
-            scan_delta_e: scanColor.best_match_delta_e,
-            delta_diff: deltaDifference,
-            matched: deltaDifference < 10
-          });
-        }
-      }
-    }
-    
-    if (pantoneComparisons.length > 0) {
-      const matchedCount = pantoneComparisons.filter(c => c.matched).length;
-      pantoneMatchScore = (matchedCount / pantoneComparisons.length) * 100;
-    }
-    
-    // ============================================================
-    // IMAGE COMPARISON
-    // ============================================================
-    
-    // Calculate similarity using pixelmatch
-    const diff = new Uint8ClampedArray(width * height * 4);
-    const mismatchedPixels = pixelmatch(
-      masterData.data,
-      scanData.data,
-      diff,
-      width,
-      height,
-      { threshold: 0.1 }
-    );
-    
-    const totalPixels = width * height;
-    const similarity = ((totalPixels - mismatchedPixels) / totalPixels) * 100;
-    const ssimScore = similarity / 100;
-    
-    // Calculate color difference
-    let totalColorDiff = 0;
-    const step = Math.max(1, Math.floor(masterData.data.length / 500));
-    for (let i = 0; i < masterData.data.length; i += step) {
-      const r1 = masterData.data[i];
-      const g1 = masterData.data[i + 1];
-      const b1 = masterData.data[i + 2];
-      const r2 = scanData.data[i];
-      const g2 = scanData.data[i + 1];
-      const b2 = scanData.data[i + 2];
-      const diff = Math.abs(r1 - r2) + Math.abs(g1 - g2) + Math.abs(b1 - b2);
-      totalColorDiff += diff / 3;
-    }
-    const samples = Math.floor(masterData.data.length / step / 4);
-    const colorDiff = samples > 0 ? totalColorDiff / samples : 0;
-    const colorScore = Math.max(0, Math.min(100, 100 - colorDiff / 2));
-    
-    // OCR using Tesseract.js
-    let ocrScore = 85;
-    let masterText = '';
-    let scanText = '';
-    let ocrErrors: any[] = [];
-    
-    try {
-      console.log('🔍 Running OCR with Tesseract.js...');
-      const worker = await createWorker('eng');
-      
-      const masterOcr = await worker.recognize(masterCanvas);
-      const scanOcr = await worker.recognize(scanCanvas);
-      await worker.terminate();
-      
-      masterText = masterOcr.data.text.trim();
-      scanText = scanOcr.data.text.trim();
-      
-      // Calculate text similarity
-      const maxLen = Math.max(masterText.length, scanText.length);
-      if (maxLen > 0) {
-        let differences = 0;
-        for (let i = 0; i < Math.min(masterText.length, scanText.length); i++) {
-          if (masterText[i] !== scanText[i]) differences++;
-        }
-        differences += Math.abs(masterText.length - scanText.length);
-        ocrScore = Math.max(0, 100 - (differences / maxLen) * 100);
-      } else {
-        ocrScore = 100;
-      }
-      
-      if (ocrScore < 90 && masterText && scanText) {
-        ocrErrors.push({
-          type: 'text_mismatch',
-          severity: ocrScore < 70 ? 'high' : 'medium',
-          master_text: masterText.substring(0, 100),
-          scan_text: scanText.substring(0, 100),
-          confidence: scanOcr.data.confidence
-        });
-      }
-      
-      console.log(`📝 OCR Score: ${ocrScore.toFixed(1)}%`);
-    } catch (ocrError) {
-      console.warn('OCR failed, using similarity score:', ocrError);
-      ocrScore = similarity;
-    }
-    
-    // Barcode score based on similarity
-    const barcodeScore = similarity > 90 ? 98 : similarity > 80 ? 85 : 70;
-    
-    // Calculate overall score (include Pantone match score)
-    const overallScore = (
-      ocrScore * 0.20 + 
-      colorScore * 0.20 + 
-      similarity * 0.20 + 
-      barcodeScore * 0.20 + 
-      pantoneMatchScore * 0.20
-    );
-    
-    // Generate defects
-    const defects = [];
-    if (similarity < 90 && mismatchedPixels > totalPixels * 0.05) {
-      defects.push({
-        type: 'structural_diff',
-        severity: mismatchedPixels > totalPixels * 0.15 ? 'critical' : 'warning',
-        description: `${similarity.toFixed(1)}% similarity between master and scan`,
-        area_pixels: mismatchedPixels
-      });
-    }
-    
-    if (colorDiff > colorThreshold * 10) {
-      defects.push({
-        type: 'color_shift',
-        severity: colorDiff > colorThreshold * 20 ? 'critical' : 'warning',
-        description: `Color difference detected`,
-        delta_e: colorDiff
-      });
-    }
-    
-    // Check Pantone mismatches
-    if (pantoneMatchScore < 80 && masterPantoneColors.length > 0 && scanPantoneColors.length > 0) {
-      const mismatchedPantones = pantoneComparisons.filter(c => !c.matched);
-      if (mismatchedPantones.length > 0) {
-        defects.push({
-          type: 'pantone_mismatch',
-          severity: pantoneMatchScore < 60 ? 'critical' : 'warning',
-          description: `Pantone color mismatch detected (${pantoneMatchScore.toFixed(0)}% match)`,
-          mismatches: mismatchedPantones.slice(0, 3)
-        });
-      }
-    }
-    
-    console.log(`✅ Analysis complete - Overall Score: ${overallScore.toFixed(1)}%`);
-    
-    return {
-      overall_score: Math.round(overallScore),
-      ocr_score: Math.round(ocrScore),
-      color_score: Math.round(colorScore),
-      ssim_score: ssimScore,
-      barcode_score: Math.round(barcodeScore),
-      pantone_match_score: Math.round(pantoneMatchScore),
-      alignment_confidence: similarity / 100,
-      ocr_errors: ocrErrors,
-      defects: defects,
-      master_text: masterText.substring(0, 200),
-      scan_text: scanText.substring(0, 200),
-      similarity: similarity,
-      // Pantone data
-      master_pantone_colors: masterPantoneColors,
-      scan_pantone_colors: scanPantoneColors,
-      pantone_comparisons: pantoneComparisons
-    };
+    console.log(`🎨 Master Pantone colors: ${masterPantoneColors.length}`);
+    console.log(`🎨 Scan Pantone colors: ${scanPantoneColors.length}`);
+  } catch (pantoneError) {
+    console.warn('Pantone analysis failed, continuing without it:', pantoneError);
   }
+  
+  // Calculate color match accuracy between master and scan Pantone colors
+  let pantoneMatchScore = 85;
+  const pantoneComparisons: any[] = [];
+  
+  for (const masterColor of masterPantoneColors) {
+    for (const scanColor of scanPantoneColors) {
+      const deltaDifference = Math.abs(masterColor.best_match_delta_e - scanColor.best_match_delta_e);
+      if (deltaDifference < 15) {
+        pantoneComparisons.push({
+          master_pms: masterColor.best_match_code,
+          master_hex: masterColor.hex,
+          master_delta_e: masterColor.best_match_delta_e,
+          scan_pms: scanColor.best_match_code,
+          scan_hex: scanColor.hex,
+          scan_delta_e: scanColor.best_match_delta_e,
+          delta_diff: deltaDifference,
+          matched: deltaDifference < 10
+        });
+      }
+    }
+  }
+  
+  if (pantoneComparisons.length > 0) {
+    const matchedCount = pantoneComparisons.filter(c => c.matched).length;
+    pantoneMatchScore = (matchedCount / pantoneComparisons.length) * 100;
+  }
+  
+  // ============================================================
+  // 16-GRID SIMILARITY CALCULATION (REPLACES pixelmatch)
+  // ============================================================
+  const gridSize = 4;
+  const cellWidth = Math.floor(width / gridSize);
+  const cellHeight = Math.floor(height / gridSize);
+  let totalSimilarity = 0;
+  let validCells = 0;
+  let mismatchedCellsCount = 0;
+  const cellSimilarities: number[][] = Array(gridSize).fill(null).map(() => Array(gridSize).fill(0));
+  
+  for (let row = 0; row < gridSize; row++) {
+    for (let col = 0; col < gridSize; col++) {
+      const startX = col * cellWidth;
+      const startY = row * cellHeight;
+      const endX = Math.min(startX + cellWidth, width);
+      const endY = Math.min(startY + cellHeight, height);
+      
+      let cellTotalDiff = 0;
+      let cellPixelCount = 0;
+      
+      for (let y = startY; y < endY; y++) {
+        for (let x = startX; x < endX; x++) {
+          const idx = (y * width + x) * 4;
+          const rDiff = Math.abs(masterData.data[idx] - scanData.data[idx]);
+          const gDiff = Math.abs(masterData.data[idx + 1] - scanData.data[idx + 1]);
+          const bDiff = Math.abs(masterData.data[idx + 2] - scanData.data[idx + 2]);
+          cellTotalDiff += (rDiff + gDiff + bDiff) / 3;
+          cellPixelCount++;
+        }
+      }
+      
+      const avgCellDiff = cellPixelCount > 0 ? cellTotalDiff / cellPixelCount : 0;
+      const cellSimilarity = Math.max(0, 100 - (avgCellDiff / 2.55));
+      cellSimilarities[row][col] = cellSimilarity;
+      totalSimilarity += cellSimilarity;
+      validCells++;
+      
+      if (cellSimilarity < 85) {
+        mismatchedCellsCount++;
+      }
+    }
+  }
+  
+  const similarity = validCells > 0 ? totalSimilarity / validCells : 0;
+  const ssimScore = similarity / 100;
+  
+  // ============================================================
+  // COLOR DIFFERENCE CALCULATION
+  // ============================================================
+  let totalColorDiff = 0;
+  const step = Math.max(1, Math.floor(masterData.data.length / 500));
+  for (let i = 0; i < masterData.data.length; i += step) {
+    const r1 = masterData.data[i];
+    const g1 = masterData.data[i + 1];
+    const b1 = masterData.data[i + 2];
+    const r2 = scanData.data[i];
+    const g2 = scanData.data[i + 1];
+    const b2 = scanData.data[i + 2];
+    const diff = Math.abs(r1 - r2) + Math.abs(g1 - g2) + Math.abs(b1 - b2);
+    totalColorDiff += diff / 3;
+  }
+  const samples = Math.floor(masterData.data.length / step / 4);
+  const colorDiff = samples > 0 ? totalColorDiff / samples : 0;
+  const colorScore = Math.max(0, Math.min(100, 100 - colorDiff / 2));
+  
+  // ============================================================
+  // OCR using Tesseract.js
+  // ============================================================
+  let ocrScore = 85;
+  let masterText = '';
+  let scanText = '';
+  let ocrErrors: any[] = [];
+  
+  try {
+    console.log('🔍 Running OCR with Tesseract.js...');
+    const worker = await createWorker('eng');
+    
+    const masterOcr = await worker.recognize(masterCanvas);
+    const scanOcr = await worker.recognize(scanCanvas);
+    await worker.terminate();
+    
+    masterText = masterOcr.data.text.trim();
+    scanText = scanOcr.data.text.trim();
+    
+    const maxLen = Math.max(masterText.length, scanText.length);
+    if (maxLen > 0) {
+      let differences = 0;
+      for (let i = 0; i < Math.min(masterText.length, scanText.length); i++) {
+        if (masterText[i] !== scanText[i]) differences++;
+      }
+      differences += Math.abs(masterText.length - scanText.length);
+      ocrScore = Math.max(0, 100 - (differences / maxLen) * 100);
+    } else {
+      ocrScore = 100;
+    }
+    
+    if (ocrScore < 90 && masterText && scanText) {
+      ocrErrors.push({
+        type: 'text_mismatch',
+        severity: ocrScore < 70 ? 'high' : 'medium',
+        master_text: masterText.substring(0, 100),
+        scan_text: scanText.substring(0, 100),
+        confidence: scanOcr.data.confidence
+      });
+    }
+    
+    console.log(`📝 OCR Score: ${ocrScore.toFixed(1)}%`);
+  } catch (ocrError) {
+    console.warn('OCR failed, using similarity score:', ocrError);
+    ocrScore = similarity;
+  }
+  
+  // Barcode score based on grid similarity
+  const barcodeScore = similarity > 90 ? 98 : similarity > 80 ? 85 : 70;
+  
+  // Calculate overall score
+  const overallScore = (
+    ocrScore * 0.20 + 
+    colorScore * 0.20 + 
+    similarity * 0.20 + 
+    barcodeScore * 0.20 + 
+    pantoneMatchScore * 0.20
+  );
+  
+  // Generate defects based on mismatched cells
+  const defects = [];
+  if (mismatchedCellsCount > 0) {
+    defects.push({
+      type: 'structural_diff',
+      severity: mismatchedCellsCount > 8 ? 'critical' : mismatchedCellsCount > 4 ? 'warning' : 'minor',
+      description: `${mismatchedCellsCount} of 16 sections (${Math.round(mismatchedCellsCount / 16 * 100)}%) differ from master`,
+      area_pixels: mismatchedCellsCount
+    });
+  }
+  
+  if (colorDiff > colorThreshold * 10) {
+    defects.push({
+      type: 'color_shift',
+      severity: colorDiff > colorThreshold * 20 ? 'critical' : 'warning',
+      description: `Color difference detected`,
+      delta_e: colorDiff
+    });
+  }
+  
+  // Check Pantone mismatches
+  if (pantoneMatchScore < 80 && masterPantoneColors.length > 0 && scanPantoneColors.length > 0) {
+    const mismatchedPantones = pantoneComparisons.filter(c => !c.matched);
+    if (mismatchedPantones.length > 0) {
+      defects.push({
+        type: 'pantone_mismatch',
+        severity: pantoneMatchScore < 60 ? 'critical' : 'warning',
+        description: `Pantone color mismatch detected (${pantoneMatchScore.toFixed(0)}% match)`,
+        mismatches: mismatchedPantones.slice(0, 3)
+      });
+    }
+  }
+  
+  console.log(`✅ Analysis complete - Overall Score: ${overallScore.toFixed(1)}%, Mismatched cells: ${mismatchedCellsCount}/16`);
+  
+  return {
+    overall_score: Math.round(overallScore),
+    ocr_score: Math.round(ocrScore),
+    color_score: Math.round(colorScore),
+    ssim_score: ssimScore,
+    barcode_score: Math.round(barcodeScore),
+    pantone_match_score: Math.round(pantoneMatchScore),
+    alignment_confidence: similarity / 100,
+    ocr_errors: ocrErrors,
+    defects: defects,
+    master_text: masterText.substring(0, 200),
+    scan_text: scanText.substring(0, 200),
+    similarity: similarity,
+    mismatched_cells: mismatchedCellsCount,
+    cell_similarities: cellSimilarities,
+    master_pantone_colors: masterPantoneColors,
+    scan_pantone_colors: scanPantoneColors,
+    pantone_comparisons: pantoneComparisons
+  };
+}
 
   // Helper function to convert File to Base64
   const fileToBase64 = (file: File): Promise<string> => {
@@ -1430,119 +1461,134 @@ export function ResultPage() {
   };
 
   // Generate difference image with highlighted areas
-  const generateDiffImage = async (masterBase64: string, scanBase64: string): Promise<string> => {
-    return new Promise((resolve) => {
-      const masterImg = new Image();
-      const scanImg = new Image();
-      let loadedCount = 0;
-      
-      const checkAndGenerate = () => {
-        loadedCount++;
-        if (loadedCount === 2) {
-          try {
-            const width = Math.min(scanImg.width, 500);
-            const height = (scanImg.height / scanImg.width) * width;
-            
-            const canvas = document.createElement('canvas');
-            canvas.width = width;
-            canvas.height = height;
-            const ctx = canvas.getContext('2d');
-            
-            if (!ctx) {
-              resolve(scanBase64);
-              return;
-            }
-            
-            ctx.drawImage(scanImg, 0, 0, width, height);
-            
-            const masterCanvas = document.createElement('canvas');
-            masterCanvas.width = width;
-            masterCanvas.height = height;
-            const masterCtx = masterCanvas.getContext('2d');
-            masterCtx?.drawImage(masterImg, 0, 0, width, height);
-            const masterData = masterCtx?.getImageData(0, 0, width, height);
-            const scanData = ctx.getImageData(0, 0, width, height);
-            
-            if (masterData) {
-              const diffThreshold = 50;
-              const diffPixels: { x: number; y: number }[] = [];
+  // Generate difference image with 16-piece grid comparison
+// Generate difference image with 16-piece grid comparison (THIN RED BORDERS ONLY)
+const generateDiffImage = async (masterBase64: string, scanBase64: string): Promise<string> => {
+  return new Promise((resolve) => {
+    const masterImg = new Image();
+    const scanImg = new Image();
+    let loadedCount = 0;
+    
+    const checkAndGenerate = () => {
+      loadedCount++;
+      if (loadedCount === 2) {
+        try {
+          // Use 4x4 grid = 16 pieces
+          const gridSize = 4;
+          const cellWidth = Math.floor(scanImg.width / gridSize);
+          const cellHeight = Math.floor(scanImg.height / gridSize);
+          
+          const canvas = document.createElement('canvas');
+          canvas.width = scanImg.width;
+          canvas.height = scanImg.height;
+          const ctx = canvas.getContext('2d');
+          
+          if (!ctx) {
+            resolve(scanBase64);
+            return;
+          }
+          
+          // Draw the scan image as background
+          ctx.drawImage(scanImg, 0, 0, scanImg.width, scanImg.height);
+          
+          // Create canvas for master image at same size
+          const masterCanvas = document.createElement('canvas');
+          masterCanvas.width = scanImg.width;
+          masterCanvas.height = scanImg.height;
+          const masterCtx = masterCanvas.getContext('2d');
+          masterCtx?.drawImage(masterImg, 0, 0, scanImg.width, scanImg.height);
+          const masterData = masterCtx?.getImageData(0, 0, scanImg.width, scanImg.height);
+          const scanData = ctx.getImageData(0, 0, scanImg.width, scanImg.height);
+          
+          if (!masterData) {
+            resolve(scanBase64);
+            return;
+          }
+          
+          // Compare each cell in the grid
+          const mismatchedCells: { row: number; col: number; score: number; diffPercentage: number }[] = [];
+          
+          for (let row = 0; row < gridSize; row++) {
+            for (let col = 0; col < gridSize; col++) {
+              const startX = col * cellWidth;
+              const startY = row * cellHeight;
+              const endX = Math.min(startX + cellWidth, scanImg.width);
+              const endY = Math.min(startY + cellHeight, scanImg.height);
               
-              for (let y = 0; y < height; y += 3) {
-                for (let x = 0; x < width; x += 3) {
-                  const idx = (y * width + x) * 4;
+              let totalDiff = 0;
+              let pixelCount = 0;
+              
+              // Compare each pixel in this cell
+              for (let y = startY; y < endY; y++) {
+                for (let x = startX; x < endX; x++) {
+                  const idx = (y * scanImg.width + x) * 4;
+                  
                   const rDiff = Math.abs(masterData.data[idx] - scanData.data[idx]);
                   const gDiff = Math.abs(masterData.data[idx + 1] - scanData.data[idx + 1]);
                   const bDiff = Math.abs(masterData.data[idx + 2] - scanData.data[idx + 2]);
                   
-                  if (rDiff + gDiff + bDiff > diffThreshold) {
-                    diffPixels.push({ x, y });
-                  }
+                  totalDiff += (rDiff + gDiff + bDiff) / 3;
+                  pixelCount++;
                 }
               }
               
-              setDifferenceCount(diffPixels.length);
+              const avgDiff = pixelCount > 0 ? totalDiff / pixelCount : 0;
+              const similarityScore = Math.max(0, 100 - (avgDiff / 2.55));
+              const diffPercentage = (avgDiff / 255) * 100;
               
-              const groupedBoxes: { x: number; y: number; w: number; h: number }[] = [];
-              const used = new Set();
-              
-              for (const p of diffPixels) {
-                const key = `${Math.floor(p.x / 30)},${Math.floor(p.y / 30)}`;
-                if (used.has(key)) continue;
-                used.add(key);
-                
-                let minX = p.x, maxX = p.x, minY = p.y, maxY = p.y;
-                for (const other of diffPixels) {
-                  if (Math.abs(other.x - p.x) < 50 && Math.abs(other.y - p.y) < 50) {
-                    minX = Math.min(minX, other.x);
-                    maxX = Math.max(maxX, other.x);
-                    minY = Math.min(minY, other.y);
-                    maxY = Math.max(maxY, other.y);
-                  }
-                }
-                
-                const w = maxX - minX + 12;
-                const h = maxY - minY + 12;
-                if (w * h > 200) {
-                  groupedBoxes.push({ 
-                    x: Math.max(0, minX - 4), 
-                    y: Math.max(0, minY - 4), 
-                    w: w + 8, 
-                    h: h + 8 
-                  });
-                }
+              // Consider mismatch if similarity is below 85% (15% difference threshold)
+              if (similarityScore < 85) {
+                mismatchedCells.push({ row, col, score: similarityScore, diffPercentage });
               }
-              
-              for (const box of groupedBoxes) {
-                ctx.strokeStyle = '#FF0000';
-                ctx.lineWidth = 3;
-                ctx.strokeRect(box.x, box.y, box.w, box.h);
-                ctx.fillStyle = 'rgba(255, 0, 0, 0.25)';
-                ctx.fillRect(box.x, box.y, box.w, box.h);
-              }
-              
-              ctx.font = 'bold 16px Arial';
-              ctx.fillStyle = '#FF0000';
-              ctx.fillText(`${groupedBoxes.length} difference(s)`, 10, 30);
             }
-            
-            resolve(canvas.toDataURL('image/jpeg', 0.8));
-          } catch (err) {
-            console.error('Error generating diff:', err);
-            resolve(scanBase64);
           }
+          
+          // Update the difference count (number of mismatched cells, not pixels)
+          setDifferenceCount(mismatchedCells.length);
+          
+          // Draw RED BORDERS around mismatched cells ONLY (NO FILL)
+          for (const cell of mismatchedCells) {
+            const x = cell.col * cellWidth;
+            const y = cell.row * cellHeight;
+            const w = cellWidth;
+            const h = cellHeight;
+            
+            ctx.save();
+            ctx.strokeStyle = '#FF0000';
+            ctx.lineWidth = 3;
+            ctx.setLineDash([8, 6]); // Dashed line for better visibility
+            ctx.strokeRect(x, y, w, h);
+            ctx.restore();
+          }
+          
+          // Add summary text in top-left corner
+          ctx.font = 'bold 16px Arial';
+          ctx.fillStyle = mismatchedCells.length > 0 ? '#FF0000' : '#22A06B';
+          ctx.shadowBlur = 0;
+          
+          if (mismatchedCells.length > 0) {
+            ctx.fillText(`${mismatchedCells.length} of 16 sections mismatched`, 12, 32);
+          } else {
+            ctx.fillText('✓ All 16 sections match', 12, 32);
+          }
+          
+          resolve(canvas.toDataURL('image/jpeg', 0.8));
+        } catch (err) {
+          console.error('Error generating diff:', err);
+          resolve(scanBase64);
         }
-      };
-      
-      masterImg.onload = checkAndGenerate;
-      scanImg.onload = checkAndGenerate;
-      masterImg.onerror = () => resolve(scanBase64);
-      scanImg.onerror = () => resolve(scanBase64);
-      
-      masterImg.src = masterBase64;
-      scanImg.src = scanBase64;
-    });
-  };
-
+      }
+    };
+    
+    masterImg.onload = checkAndGenerate;
+    scanImg.onload = checkAndGenerate;
+    masterImg.onerror = () => resolve(scanBase64);
+    scanImg.onerror = () => resolve(scanBase64);
+    
+    masterImg.src = masterBase64;
+    scanImg.src = scanBase64;
+  });
+};
   // Pantone Color Card Component
   function PantoneColorCard({ color, onCopy, title }: { color: any; onCopy: (text: string) => void; title?: string }) {
     if (!color) return null;
