@@ -1547,7 +1547,7 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
               console.log(`Cell [${row},${col}] difference: ${diffPercent.toFixed(2)}%`);
               
               // USING 1% THRESHOLD (much more sensitive)
-              if (diffPercent > 1.0) {
+              if (diffPercent > 12.0) {
                 mismatchedCells.push({ 
                   row, col, diffPercent,
                   x: startX, y: startY, w: cellWidth, h: cellHeight
