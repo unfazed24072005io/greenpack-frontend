@@ -891,7 +891,7 @@ for (let row = 0; row < gridSize; row++) {
     validCells++;
     
     // ONLY mark as mismatch if difference is above 15%
-    if (diffPercent > 15) {
+    if (diffPercent > 7) {
       mismatchedCellsCount++;
     }
   }
@@ -1480,7 +1480,7 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
       loadedCount++;
       if (loadedCount === 2) {
         try {
-          console.log('🖼️ Generating diff image - SENSITIVE MODE (1% threshold)');
+          console.log('🖼️ Generating diff image - SENSITIVE MODE');
           
           const gridSize = 4;
           const cellWidth = Math.floor(scanImg.width / gridSize);
@@ -1515,8 +1515,9 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
             return;
           }
           
-          // Compare cells with LOWER threshold (1% instead of 5%)
+          // MORE SENSITIVE: Compare cells with 2% threshold (not 12%!)
           const mismatchedCells: { row: number; col: number; diffPercent: number; x: number; y: number; w: number; h: number }[] = [];
+          let totalDiffAllCells = 0;
           
           for (let row = 0; row < gridSize; row++) {
             for (let col = 0; col < gridSize; col++) {
@@ -1546,47 +1547,66 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
               
               console.log(`Cell [${row},${col}] difference: ${diffPercent.toFixed(2)}%`);
               
-              // USING 1% THRESHOLD (much more sensitive)
-              if (diffPercent > 12.0) {
+              // MUCH MORE SENSITIVE: ANY difference above 1.5% triggers a mismatch
+              // This is 8x more sensitive than before (was 12%)
+              if (diffPercent > 1.5) {
                 mismatchedCells.push({ 
                   row, col, diffPercent,
                   x: startX, y: startY, w: cellWidth, h: cellHeight
                 });
               }
+              
+              totalDiffAllCells += diffPercent;
             }
           }
           
-          console.log(`Found ${mismatchedCells.length} cells with >1% difference`);
+          const avgDiffPercent = totalDiffAllCells / 16;
+          console.log(`Average difference across all cells: ${avgDiffPercent.toFixed(2)}%`);
+          console.log(`Found ${mismatchedCells.length} cells with >1.5% difference`);
           
           setDifferenceCount(mismatchedCells.length);
           
           ctx.save();
           
-          // Draw RED borders on mismatched cells
+          // Draw RED dotted borders on mismatched cells
           for (const cell of mismatchedCells) {
             ctx.beginPath();
             ctx.strokeStyle = '#FF0000';
-            ctx.lineWidth = 4;
-            ctx.setLineDash([8, 6]);
+            ctx.lineWidth = 3;
+            ctx.setLineDash([6, 6]);
             ctx.strokeRect(cell.x, cell.y, cell.w, cell.h);
             
-            // Add difference percentage
-            ctx.font = 'bold 16px Arial';
+            // Add difference percentage label
+            ctx.font = 'bold 14px Arial';
             ctx.fillStyle = '#FF0000';
             ctx.setLineDash([]);
-            ctx.fillText(`${cell.diffPercent.toFixed(1)}%`, cell.x + 8, cell.y + 25);
+            ctx.shadowBlur = 0;
+            const label = `${cell.diffPercent.toFixed(1)}%`;
+            const textWidth = ctx.measureText(label).width;
+            ctx.fillStyle = 'rgba(0,0,0,0.7)';
+            ctx.fillRect(cell.x + 5, cell.y + 5, textWidth + 8, 20);
+            ctx.fillStyle = '#FF0000';
+            ctx.fillText(label, cell.x + 9, cell.y + 20);
           }
           
-          // Add summary
-          ctx.font = 'bold 14px Arial';
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-          ctx.fillRect(8, 8, 300, 50);
-          ctx.fillStyle = mismatchedCells.length > 0 ? '#FF0000' : '#22A06B';
-          ctx.font = 'bold 14px Arial';
-          ctx.fillText(`${mismatchedCells.length} section(s) with differences`, 12, 30);
-          ctx.font = '12px Arial';
-          ctx.fillStyle = '#FFFFFF';
-          ctx.fillText(`Max diff: 2.22% | Threshold: 1%`, 12, 48);
+          // Add summary overlay
+          ctx.font = 'bold 13px Arial';
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+          ctx.fillRect(8, 8, 320, 55);
+          
+          if (mismatchedCells.length > 0) {
+            ctx.fillStyle = '#FF4444';
+            ctx.fillText(`⚠️ ${mismatchedCells.length} SECTION(S) WITH DIFFERENCES`, 12, 28);
+            ctx.font = '11px Arial';
+            ctx.fillStyle = '#FF8888';
+            ctx.fillText(`Average difference: ${avgDiffPercent.toFixed(1)}%`, 12, 48);
+          } else {
+            ctx.fillStyle = '#22A06B';
+            ctx.fillText(`✓ NO DIFFERENCES DETECTED`, 12, 28);
+            ctx.font = '11px Arial';
+            ctx.fillStyle = '#888888';
+            ctx.fillText(`Average difference: ${avgDiffPercent.toFixed(1)}%`, 12, 48);
+          }
           
           ctx.restore();
           
