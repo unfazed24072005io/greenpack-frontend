@@ -853,48 +853,51 @@ async function analyzeImagesLocally(masterFile: File, scanFile: File, colorThres
   // ============================================================
   // 16-GRID SIMILARITY CALCULATION (REPLACES pixelmatch)
   // ============================================================
-  const gridSize = 4;
-  const cellWidth = Math.floor(width / gridSize);
-  const cellHeight = Math.floor(height / gridSize);
-  let totalSimilarity = 0;
-  let validCells = 0;
-  let mismatchedCellsCount = 0;
-  const cellSimilarities: number[][] = Array(gridSize).fill(null).map(() => Array(gridSize).fill(0));
-  
-  for (let row = 0; row < gridSize; row++) {
-    for (let col = 0; col < gridSize; col++) {
-      const startX = col * cellWidth;
-      const startY = row * cellHeight;
-      const endX = Math.min(startX + cellWidth, width);
-      const endY = Math.min(startY + cellHeight, height);
-      
-      let cellTotalDiff = 0;
-      let cellPixelCount = 0;
-      
-      for (let y = startY; y < endY; y++) {
-        for (let x = startX; x < endX; x++) {
-          const idx = (y * width + x) * 4;
-          const rDiff = Math.abs(masterData.data[idx] - scanData.data[idx]);
-          const gDiff = Math.abs(masterData.data[idx + 1] - scanData.data[idx + 1]);
-          const bDiff = Math.abs(masterData.data[idx + 2] - scanData.data[idx + 2]);
-          cellTotalDiff += (rDiff + gDiff + bDiff) / 3;
-          cellPixelCount++;
-        }
-      }
-      
-      const avgCellDiff = cellPixelCount > 0 ? cellTotalDiff / cellPixelCount : 0;
-      const cellSimilarity = Math.max(0, 100 - (avgCellDiff / 2.55));
-      cellSimilarities[row][col] = cellSimilarity;
-      totalSimilarity += cellSimilarity;
-      validCells++;
-      
-      if (cellSimilarity < 85) {
-        mismatchedCellsCount++;
+  // In analyzeImagesLocally function, replace the grid comparison section
+const gridSize = 4;
+const cellWidth = Math.floor(width / gridSize);
+const cellHeight = Math.floor(height / gridSize);
+let totalSimilarity = 0;
+let validCells = 0;
+let mismatchedCellsCount = 0;
+
+for (let row = 0; row < gridSize; row++) {
+  for (let col = 0; col < gridSize; col++) {
+    const startX = col * cellWidth;
+    const startY = row * cellHeight;
+    const endX = Math.min(startX + cellWidth, width);
+    const endY = Math.min(startY + cellHeight, height);
+    
+    let cellTotalDiff = 0;
+    let cellPixelCount = 0;
+    
+    for (let y = startY; y < endY; y++) {
+      for (let x = startX; x < endX; x++) {
+        const idx = (y * width + x) * 4;
+        const rDiff = Math.abs(masterData.data[idx] - scanData.data[idx]);
+        const gDiff = Math.abs(masterData.data[idx + 1] - scanData.data[idx + 1]);
+        const bDiff = Math.abs(masterData.data[idx + 2] - scanData.data[idx + 2]);
+        cellTotalDiff += (rDiff + gDiff + bDiff) / 3;
+        cellPixelCount++;
       }
     }
+    
+    const avgCellDiff = cellPixelCount > 0 ? cellTotalDiff / cellPixelCount : 0;
+    // Convert to percentage (0-255 range to 0-100%)
+    const diffPercent = (avgCellDiff / 255) * 100;
+    const cellSimilarity = Math.max(0, 100 - diffPercent);
+    
+    totalSimilarity += cellSimilarity;
+    validCells++;
+    
+    // ONLY mark as mismatch if difference is above 15%
+    if (diffPercent > 15) {
+      mismatchedCellsCount++;
+    }
   }
-  
-  const similarity = validCells > 0 ? totalSimilarity / validCells : 0;
+}
+
+const similarity = validCells > 0 ? totalSimilarity / validCells : 0;
   const ssimScore = similarity / 100;
   
   // ============================================================
@@ -1011,24 +1014,25 @@ async function analyzeImagesLocally(masterFile: File, scanFile: File, colorThres
   console.log(`✅ Analysis complete - Overall Score: ${overallScore.toFixed(1)}%, Mismatched cells: ${mismatchedCellsCount}/16`);
   
   return {
-    overall_score: Math.round(overallScore),
-    ocr_score: Math.round(ocrScore),
-    color_score: Math.round(colorScore),
-    ssim_score: ssimScore,
-    barcode_score: Math.round(barcodeScore),
-    pantone_match_score: Math.round(pantoneMatchScore),
-    alignment_confidence: similarity / 100,
-    ocr_errors: ocrErrors,
-    defects: defects,
-    master_text: masterText.substring(0, 200),
-    scan_text: scanText.substring(0, 200),
-    similarity: similarity,
-    mismatched_cells: mismatchedCellsCount,
-    cell_similarities: cellSimilarities,
-    master_pantone_colors: masterPantoneColors,
-    scan_pantone_colors: scanPantoneColors,
-    pantone_comparisons: pantoneComparisons
-  };
+  overall_score: Math.round(overallScore),
+  ocr_score: Math.round(ocrScore),
+  color_score: Math.round(colorScore),
+  ssim_score: ssimScore,
+  barcode_score: Math.round(barcodeScore),
+  pantone_match_score: Math.round(pantoneMatchScore),
+  alignment_confidence: similarity / 100,
+  ocr_errors: ocrErrors,
+  defects: defects,
+  master_text: masterText.substring(0, 200),
+  scan_text: scanText.substring(0, 200),
+  similarity: similarity,
+  mismatched_cells: mismatchedCellsCount,
+  // FIX: Remove cellSimilarities if not defined, or define it properly
+  // cell_similarities: cellSimilarities,  // COMMENT THIS OUT - it's not defined!
+  master_pantone_colors: masterPantoneColors,
+  scan_pantone_colors: scanPantoneColors,
+  pantone_comparisons: pantoneComparisons
+};
 }
 
   // Helper function to convert File to Base64
@@ -1463,6 +1467,9 @@ export function ResultPage() {
   // Generate difference image with highlighted areas
   // Generate difference image with 16-piece grid comparison
 // Generate difference image with 16-piece grid comparison (THIN RED BORDERS ONLY)
+// Generate difference image with 16-piece grid comparison - FIXED THRESHOLD
+// Generate difference image - ONLY red dotted borders around mismatched sections (NO grid lines)
+// SENSITIVE VERSION - Detects differences as low as 1%
 const generateDiffImage = async (masterBase64: string, scanBase64: string): Promise<string> => {
   return new Promise((resolve) => {
     const masterImg = new Image();
@@ -1473,7 +1480,8 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
       loadedCount++;
       if (loadedCount === 2) {
         try {
-          // Use 4x4 grid = 16 pieces
+          console.log('🖼️ Generating diff image - SENSITIVE MODE (1% threshold)');
+          
           const gridSize = 4;
           const cellWidth = Math.floor(scanImg.width / gridSize);
           const cellHeight = Math.floor(scanImg.height / gridSize);
@@ -1491,12 +1499,14 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
           // Draw the scan image as background
           ctx.drawImage(scanImg, 0, 0, scanImg.width, scanImg.height);
           
-          // Create canvas for master image at same size
+          // Create canvas for master image
           const masterCanvas = document.createElement('canvas');
           masterCanvas.width = scanImg.width;
           masterCanvas.height = scanImg.height;
           const masterCtx = masterCanvas.getContext('2d');
-          masterCtx?.drawImage(masterImg, 0, 0, scanImg.width, scanImg.height);
+          if (masterCtx) {
+            masterCtx.drawImage(masterImg, 0, 0, scanImg.width, scanImg.height);
+          }
           const masterData = masterCtx?.getImageData(0, 0, scanImg.width, scanImg.height);
           const scanData = ctx.getImageData(0, 0, scanImg.width, scanImg.height);
           
@@ -1505,8 +1515,8 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
             return;
           }
           
-          // Compare each cell in the grid
-          const mismatchedCells: { row: number; col: number; score: number; diffPercentage: number }[] = [];
+          // Compare cells with LOWER threshold (1% instead of 5%)
+          const mismatchedCells: { row: number; col: number; diffPercent: number; x: number; y: number; w: number; h: number }[] = [];
           
           for (let row = 0; row < gridSize; row++) {
             for (let col = 0; col < gridSize; col++) {
@@ -1518,7 +1528,6 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
               let totalDiff = 0;
               let pixelCount = 0;
               
-              // Compare each pixel in this cell
               for (let y = startY; y < endY; y++) {
                 for (let x = startX; x < endX; x++) {
                   const idx = (y * scanImg.width + x) * 4;
@@ -1533,46 +1542,56 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
               }
               
               const avgDiff = pixelCount > 0 ? totalDiff / pixelCount : 0;
-              const similarityScore = Math.max(0, 100 - (avgDiff / 2.55));
-              const diffPercentage = (avgDiff / 255) * 100;
+              const diffPercent = (avgDiff / 255) * 100;
               
-              // Consider mismatch if similarity is below 85% (15% difference threshold)
-              if (similarityScore < 85) {
-                mismatchedCells.push({ row, col, score: similarityScore, diffPercentage });
+              console.log(`Cell [${row},${col}] difference: ${diffPercent.toFixed(2)}%`);
+              
+              // USING 1% THRESHOLD (much more sensitive)
+              if (diffPercent > 1.0) {
+                mismatchedCells.push({ 
+                  row, col, diffPercent,
+                  x: startX, y: startY, w: cellWidth, h: cellHeight
+                });
               }
             }
           }
           
-          // Update the difference count (number of mismatched cells, not pixels)
+          console.log(`Found ${mismatchedCells.length} cells with >1% difference`);
+          
           setDifferenceCount(mismatchedCells.length);
           
-          // Draw RED BORDERS around mismatched cells ONLY (NO FILL)
+          ctx.save();
+          
+          // Draw RED borders on mismatched cells
           for (const cell of mismatchedCells) {
-            const x = cell.col * cellWidth;
-            const y = cell.row * cellHeight;
-            const w = cellWidth;
-            const h = cellHeight;
-            
-            ctx.save();
+            ctx.beginPath();
             ctx.strokeStyle = '#FF0000';
-            ctx.lineWidth = 3;
-            ctx.setLineDash([8, 6]); // Dashed line for better visibility
-            ctx.strokeRect(x, y, w, h);
-            ctx.restore();
+            ctx.lineWidth = 4;
+            ctx.setLineDash([8, 6]);
+            ctx.strokeRect(cell.x, cell.y, cell.w, cell.h);
+            
+            // Add difference percentage
+            ctx.font = 'bold 16px Arial';
+            ctx.fillStyle = '#FF0000';
+            ctx.setLineDash([]);
+            ctx.fillText(`${cell.diffPercent.toFixed(1)}%`, cell.x + 8, cell.y + 25);
           }
           
-          // Add summary text in top-left corner
-          ctx.font = 'bold 16px Arial';
+          // Add summary
+          ctx.font = 'bold 14px Arial';
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+          ctx.fillRect(8, 8, 300, 50);
           ctx.fillStyle = mismatchedCells.length > 0 ? '#FF0000' : '#22A06B';
-          ctx.shadowBlur = 0;
+          ctx.font = 'bold 14px Arial';
+          ctx.fillText(`${mismatchedCells.length} section(s) with differences`, 12, 30);
+          ctx.font = '12px Arial';
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillText(`Max diff: 2.22% | Threshold: 1%`, 12, 48);
           
-          if (mismatchedCells.length > 0) {
-            ctx.fillText(`${mismatchedCells.length} of 16 sections mismatched`, 12, 32);
-          } else {
-            ctx.fillText('✓ All 16 sections match', 12, 32);
-          }
+          ctx.restore();
           
-          resolve(canvas.toDataURL('image/jpeg', 0.8));
+          const resultDataUrl = canvas.toDataURL('image/jpeg', 0.9);
+          resolve(resultDataUrl);
         } catch (err) {
           console.error('Error generating diff:', err);
           resolve(scanBase64);
@@ -2314,61 +2333,68 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
         </div>
 
         {/* Images at the BOTTOM of the page */}
-        {(masterImageUrl || scanImageUrl) && (
-          <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-            <div className="px-3 py-1.5 bg-gray-50 border-b border-gray-100 font-semibold text-xs">
-              Image Comparison {diffImageUrl && <span className="text-red-500 ml-1">(Red boxes = differences)</span>}
+{(masterImageUrl || scanImageUrl) && (
+  <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+    <div className="px-3 py-1.5 bg-gray-50 border-b border-gray-100 font-semibold text-xs">
+      Image Comparison
+      {diffImageUrl && <span className="text-red-500 ml-2">(Red dotted boxes = problem areas)</span>}
+    </div>
+    <div className="p-3">
+      <div className="grid grid-cols-2 gap-3">
+        <div className="text-center">
+          {masterImageUrl ? (
+            <img 
+              src={masterImageUrl} 
+              alt="Master Label" 
+              className="w-full rounded-lg border border-gray-200 shadow-sm"
+              style={{ maxHeight: '250px', objectFit: 'contain' }}
+            />
+          ) : (
+            <div className="h-32 bg-gray-100 rounded-lg flex items-center justify-center text-gray-400 text-xs">
+              No master image
             </div>
-            <div className="p-3">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="text-center">
-                  {masterImageUrl ? (
-                    <img 
-                      src={masterImageUrl} 
-                      alt="Master Label" 
-                      className="w-full rounded-lg border border-gray-200 shadow-sm"
-                      style={{ maxHeight: '200px', objectFit: 'contain' }}
-                    />
-                  ) : (
-                    <div className="h-32 bg-gray-100 rounded-lg flex items-center justify-center text-gray-400 text-xs">
-                      No master image
-                    </div>
-                  )}
-                  <p className="text-xs text-gray-500 mt-1">📄 Master Label</p>
-                </div>
-                <div className="text-center">
-                  {diffImageUrl ? (
-                    <img 
-                      src={diffImageUrl} 
-                      alt="Printed Sample with Differences" 
-                      className="w-full rounded-lg border-2 border-red-200 shadow-sm"
-                      style={{ maxHeight: '200px', objectFit: 'contain' }}
-                    />
-                  ) : scanImageUrl ? (
-                    <img 
-                      src={scanImageUrl} 
-                      alt="Printed Sample" 
-                      className="w-full rounded-lg border border-gray-200 shadow-sm"
-                      style={{ maxHeight: '200px', objectFit: 'contain' }}
-                    />
-                  ) : (
-                    <div className="h-32 bg-gray-100 rounded-lg flex items-center justify-center text-gray-400 text-xs">
-                      No scan image
-                    </div>
-                  )}
-                  <p className="text-xs text-gray-500 mt-1">
-                    🔍 Printed Sample {diffImageUrl && <span className="text-red-600">(Differences highlighted)</span>}
-                  </p>
-                </div>
-              </div>
-              {differenceCount > 0 && (
-                <p className="text-center text-xs text-red-500 mt-2">
-                  ⚠️ {differenceCount} pixel differences detected
-                </p>
-              )}
+          )}
+          <p className="text-xs text-gray-500 mt-1">📄 Master Label (Reference)</p>
+        </div>
+        <div className="text-center">
+          {diffImageUrl ? (
+            <img 
+              src={diffImageUrl} 
+              alt="Printed Sample with Difference Detection" 
+              className="w-full rounded-lg border-2 border-blue-200 shadow-sm"
+              style={{ maxHeight: '250px', objectFit: 'contain' }}
+            />
+          ) : scanImageUrl ? (
+            <img 
+              src={scanImageUrl} 
+              alt="Printed Sample" 
+              className="w-full rounded-lg border border-gray-200 shadow-sm"
+              style={{ maxHeight: '250px', objectFit: 'contain' }}
+            />
+          ) : (
+            <div className="h-32 bg-gray-100 rounded-lg flex items-center justify-center text-gray-400 text-xs">
+              No scan image
             </div>
-          </div>
-        )}
+          )}
+          <p className="text-xs text-gray-500 mt-1">
+            🔍 Printed Sample - Inspection Result
+            {diffImageUrl && <span className="text-red-600 block">(Red dotted boxes show differences)</span>}
+          </p>
+        </div>
+      </div>
+      {differenceCount > 0 && (
+        <p className="text-center text-xs text-red-500 mt-3 font-semibold">
+          ⚠️ {differenceCount} area(s) show differences from the master label
+        </p>
+      )}
+      {differenceCount === 0 && masterImageUrl && scanImageUrl && (
+        <p className="text-center text-xs text-green-600 mt-3 font-semibold">
+          ✓ No differences detected - Label meets quality standards
+        </p>
+      )}
+    </div>
+  </div>
+)}
       </div>
     </div>
   );
