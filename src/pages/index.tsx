@@ -809,8 +809,11 @@ export function NewInspectionPage() {
         scanCanvas.toBlob((blob) => resolve(blob!), 'image/jpeg', 0.9);
       });
       
-      const masterPantoneResult = await analyzePantoneColors(masterBlob, 6, true, 3);
-      const scanPantoneResult = await analyzePantoneColors(scanBlob, 6, true, 3);
+      const masterPantoneFile = new File([masterBlob], 'master-pantone.jpg', { type: 'image/jpeg' });
+const scanPantoneFile = new File([scanBlob], 'scan-pantone.jpg', { type: 'image/jpeg' });
+
+const masterPantoneResult = await analyzePantoneColors(masterPantoneFile, 6, true, 3);
+const scanPantoneResult = await analyzePantoneColors(scanPantoneFile, 6, true, 3);
       
       masterPantoneColors = masterPantoneResult.extracted_colors || [];
       scanPantoneColors = scanPantoneResult.extracted_colors || [];
@@ -1349,7 +1352,18 @@ export function NewInspectionPage() {
 // ═══════════════════════════════════════════════════════════
 // RESULT PAGE WITH PANTONE TABLE
 // ═══════════════════════════════════════════════════════════
-
+// Add this component before ResultPage
+function ProcessingView({ job }: { job: any }) {
+  return (
+    <div className="flex items-center justify-center h-full min-h-[400px]">
+      <div className="text-center">
+        <Spinner size={48} />
+        <p className="mt-4 text-gray-600">Processing inspection...</p>
+        <p className="text-sm text-gray-400 mt-2">Job: {job?.jobNumber}</p>
+      </div>
+    </div>
+  );
+}
 export function ResultPage() {
   const { jobId } = useParams();
   const navigate = useNavigate();
