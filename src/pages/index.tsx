@@ -1531,7 +1531,6 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
             return;
           }
           
-          const DIFF_THRESHOLD = 12; // 12% difference threshold
           const mismatchedCells: { row: number; col: number; diffPercent: number; x: number; y: number; w: number; h: number }[] = [];
           let totalDiffAllCells = 0;
           
