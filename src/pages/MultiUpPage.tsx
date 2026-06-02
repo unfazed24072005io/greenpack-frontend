@@ -1398,7 +1398,16 @@ export function MultiUpResultPage() {
 // LABEL DETAIL MODAL
 // ============================================================
 
+// ============================================================
+// LABEL DETAIL MODAL - FIXED TEXT CONTRAST
+// ============================================================
+
 function LabelDetailModal({ label, onClose }: any) {
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    toast.success(`Copied: ${text}`);
+  };
+
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
       onClick={onClose}>
@@ -1426,7 +1435,7 @@ function LabelDetailModal({ label, onClose }: any) {
 
         <div className="p-6 space-y-5">
           {/* Sub-scores grid - includes Mottling and Banding */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <MiniScore label="OCR" value={label.ocr_score} />
             <MiniScore label="Color" value={label.color_score} />
             <MiniScore label="SSIM" value={label.ssim_score ? label.ssim_score * 100 : null} suffix="%" />
@@ -1437,7 +1446,7 @@ function LabelDetailModal({ label, onClose }: any) {
             <MiniScore label="Alignment" value={label.registration?.offset_px ? 100 - Math.min(100, label.registration.offset_px / 2) : null} suffix="%" />
           </div>
 
-          {/* Real OCR Errors from Tesseract.js */}
+          {/* Real OCR Errors from Tesseract.js - FIXED TEXT COLOR */}
           {label.ocr_errors?.length > 0 && (
             <div>
               <h3 className="font-semibold text-sm mb-2 text-[#0D1B2A]">
@@ -1450,63 +1459,120 @@ function LabelDetailModal({ label, onClose }: any) {
                     err.severity === 'high' ? 'bg-red-50 border-red-200' : 'bg-yellow-50 border-yellow-200'
                   )}>
                     <div className="flex items-center gap-2 mb-1">
-                      <span className="text-xs font-bold px-2 py-0.5 bg-white rounded">
+                      <span className="text-xs font-bold px-2 py-0.5 bg-white rounded text-gray-700">
                         {err.type}
                       </span>
-                      <span className="text-xs">{err.severity}</span>
+                      <span className={clsx(
+                        'text-xs font-medium',
+                        err.severity === 'high' ? 'text-red-700' : 'text-yellow-700'
+                      )}>
+                        {err.severity.toUpperCase()}
+                      </span>
                     </div>
-                    <div className="font-mono text-xs">
-                      <div>Master: <b className="text-green-700">"{err.master_text}"</b></div>
-                      <div>Scan: <b className="text-red-700">"{err.scan_text}"</b></div>
-                      {err.confidence && <div>OCR Confidence: {err.confidence.toFixed(1)}%</div>}
+                    <div className="font-mono text-xs space-y-1">
+                      <div className="text-gray-700">
+                        Master: <span className="font-bold text-green-700">"{err.master_text?.substring(0, 100) || 'N/A'}"</span>
+                      </div>
+                      <div className="text-gray-700">
+                        Scan: <span className="font-bold text-red-700">"{err.scan_text?.substring(0, 100) || 'N/A'}"</span>
+                      </div>
+                      {err.confidence && (
+                        <div className="text-gray-500">
+                          OCR Confidence: <span className="font-medium">{err.confidence.toFixed(1)}%</span>
+                        </div>
+                      )}
                     </div>
+                    <button 
+                      onClick={() => copyToClipboard(err.master_text)}
+                      className="mt-2 text-xs text-blue-500 hover:text-blue-700 flex items-center gap-1"
+                    >
+                      <Copy size={10} /> Copy master text
+                    </button>
                   </div>
                 ))}
               </div>
             </div>
           )}
 
-          {/* Defects */}
+          {/* Defects - FIXED TEXT COLOR */}
           {label.defects?.length > 0 && (
             <div>
               <h3 className="font-semibold text-sm mb-2 text-[#0D1B2A]">
                 Print Defects ({label.defects.length})
               </h3>
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 {label.defects.slice(0, 10).map((d: any, i: number) => (
-                  <div key={i} className="p-2 rounded-lg bg-orange-50 border border-orange-200 text-xs flex items-center gap-2 flex-wrap">
-                    <AlertTriangle size={14} className="text-orange-600 shrink-0" />
-                    <span className="font-semibold">{d.type}</span>
-                    <span className="text-gray-500">({d.severity})</span>
-                    <span className="text-gray-400">
-                      {d.bbox && `at (${d.bbox.x}, ${d.bbox.y}) — `}{d.area_pixels && `${d.area_pixels}px²`}
-                    </span>
+                  <div key={i} className="p-3 rounded-lg bg-orange-50 border border-orange-200">
+                    <div className="flex items-center gap-2 flex-wrap mb-1">
+                      <AlertTriangle size={14} className="text-orange-600 shrink-0" />
+                      <span className="font-semibold text-sm text-gray-800">{d.type?.replace('_', ' ').toUpperCase()}</span>
+                      <span className={clsx(
+                        'text-xs px-2 py-0.5 rounded-full font-medium',
+                        d.severity === 'critical' ? 'bg-red-100 text-red-700' :
+                        d.severity === 'warning' ? 'bg-yellow-100 text-yellow-700' :
+                        'bg-blue-100 text-blue-700'
+                      )}>
+                        {d.severity?.toUpperCase()}
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-700">{d.description}</p>
+                    {d.delta_e && (
+                      <div className="text-xs text-gray-500 mt-1">
+                        ΔE: <span className="font-mono font-medium">{d.delta_e.toFixed(1)}</span>
+                      </div>
+                    )}
+                    {d.area_pixels && (
+                      <div className="text-xs text-gray-500 mt-1">
+                        Affected area: <span className="font-medium">{d.area_pixels.toLocaleString()} pixels</span>
+                      </div>
+                    )}
+                    {d.mismatches && d.mismatches.length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-orange-200">
+                        <div className="text-xs font-semibold text-gray-600 mb-1">Pantone mismatches:</div>
+                        {d.mismatches.slice(0, 3).map((m: any, mi: number) => (
+                          <div key={mi} className="text-xs text-gray-600 flex items-center gap-2">
+                            <span>Master: {m.master_pms} (ΔE {m.master_delta_e})</span>
+                            <span>→</span>
+                            <span>Scan: {m.scan_pms} (ΔE {m.scan_delta_e})</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
             </div>
           )}
 
-          {/* Registration details */}
+          {/* Registration details - FIXED TEXT COLOR */}
           {label.registration && (
             <div>
               <h3 className="font-semibold text-sm mb-2 text-[#0D1B2A]">Registration Drift (REAL Data)</h3>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
-                <div className="p-2 bg-gray-50 rounded">
-                  <div className="text-xs text-gray-500">Offset</div>
-                  <div className="font-bold">{label.registration.offset_px?.toFixed(1)}px</div>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
+                <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
+                  <div className="text-xs text-gray-500 mb-1">Offset</div>
+                  <div className="font-bold text-gray-900">{label.registration.offset_px?.toFixed(1)} px</div>
                 </div>
-                <div className="p-2 bg-gray-50 rounded">
-                  <div className="text-xs text-gray-500">In mm</div>
-                  <div className="font-bold">{label.registration.offset_mm?.toFixed(2)}mm</div>
+                <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
+                  <div className="text-xs text-gray-500 mb-1">In mm</div>
+                  <div className="font-bold text-gray-900">{label.registration.offset_mm?.toFixed(2)} mm</div>
                 </div>
-                <div className="p-2 bg-gray-50 rounded">
-                  <div className="text-xs text-gray-500">Direction</div>
-                  <div className="font-bold">
-                    dx:{label.registration.dx_px?.toFixed(1)}, dy:{label.registration.dy_px?.toFixed(1)}
+                <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
+                  <div className="text-xs text-gray-500 mb-1">Direction</div>
+                  <div className="font-bold text-gray-900">
+                    dx: {label.registration.dx_px?.toFixed(1)}, dy: {label.registration.dy_px?.toFixed(1)}
                   </div>
                 </div>
               </div>
+            </div>
+          )}
+          
+          {/* No issues message */}
+          {(!label.ocr_errors?.length && !label.defects?.length) && (
+            <div className="text-center py-6">
+              <CheckCircle2 size={48} className="mx-auto text-green-500 mb-2" />
+              <p className="text-gray-600 font-medium">No defects or OCR errors detected</p>
+              <p className="text-sm text-gray-400 mt-1">This label meets quality standards</p>
             </div>
           )}
         </div>
@@ -1514,31 +1580,36 @@ function LabelDetailModal({ label, onClose }: any) {
     </div>
   );
 }
-
 function MiniScore({ label, value, suffix = '', isBanding = false }: any) {
   if (isBanding) {
     const isDetected = value === 0;
     return (
-      <div className="p-2 bg-gray-50 rounded-lg text-center">
-        <div className="text-xs text-gray-500">{label}</div>
-        <div className={clsx('text-lg font-black', isDetected ? 'text-red-600' : 'text-green-600')}>
-          {isDetected ? 'Detected' : 'Clear'}
+      <div className="p-3 bg-gray-50 rounded-lg text-center border border-gray-100">
+        <div className="text-xs text-gray-500 mb-1">{label}</div>
+        <div className={clsx('text-base font-black', isDetected ? 'text-red-600' : 'text-green-600')}>
+          {isDetected ? '⚠️ Detected' : '✓ Clear'}
         </div>
       </div>
     );
   }
   
-  const color = value >= 75 ? 'text-green-600' : value >= 50 ? 'text-yellow-600' : 'text-red-600';
-  const displayValue = value != null ? value.toFixed(0) : '—';
+  const numValue = typeof value === 'number' ? value : parseFloat(value);
+  const isValid = !isNaN(numValue) && value !== null && value !== undefined;
+  
+  const color = isValid 
+    ? (numValue >= 75 ? 'text-green-600' : numValue >= 60 ? 'text-yellow-600' : 'text-red-600')
+    : 'text-gray-400';
+    
+  const displayValue = isValid ? numValue.toFixed(0) : '—';
+  
   return (
-    <div className="p-2 bg-gray-50 rounded-lg text-center">
-      <div className="text-xs text-gray-500">{label}</div>
-      <div className={clsx('text-lg font-black', color)}>
+    <div className="p-3 bg-gray-50 rounded-lg text-center border border-gray-100">
+      <div className="text-xs text-gray-500 mb-1">{label}</div>
+      <div className={clsx('text-xl font-black', color)}>
         {displayValue}{suffix}
       </div>
     </div>
   );
 }
-
 // Default export
 export default MultiUpInspectionPage;

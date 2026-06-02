@@ -8,6 +8,7 @@ import toast from 'react-hot-toast';
 import { extractColors } from 'extract-colors';
 import { getNearestPantone, getSimilarColors } from 'pantone-tcx';
 import { Palette } from 'lucide-react';
+import OpenAI from 'openai';
 import {
   Upload, Scan, FileText, BarChart3, CheckCircle2, XCircle,
   AlertTriangle, Clock, Download, Printer, RefreshCw, Plus,
@@ -851,53 +852,60 @@ async function analyzeImagesLocally(masterFile: File, scanFile: File, colorThres
   }
   
   // ============================================================
-  // 16-GRID SIMILARITY CALCULATION (REPLACES pixelmatch)
+  // 16-GRID SIMILARITY CALCULATION - CONSISTENT WITH VISUAL
   // ============================================================
-  // In analyzeImagesLocally function, replace the grid comparison section
-const gridSize = 4;
-const cellWidth = Math.floor(width / gridSize);
-const cellHeight = Math.floor(height / gridSize);
-let totalSimilarity = 0;
-let validCells = 0;
-let mismatchedCellsCount = 0;
-
-for (let row = 0; row < gridSize; row++) {
-  for (let col = 0; col < gridSize; col++) {
-    const startX = col * cellWidth;
-    const startY = row * cellHeight;
-    const endX = Math.min(startX + cellWidth, width);
-    const endY = Math.min(startY + cellHeight, height);
-    
-    let cellTotalDiff = 0;
-    let cellPixelCount = 0;
-    
-    for (let y = startY; y < endY; y++) {
-      for (let x = startX; x < endX; x++) {
-        const idx = (y * width + x) * 4;
-        const rDiff = Math.abs(masterData.data[idx] - scanData.data[idx]);
-        const gDiff = Math.abs(masterData.data[idx + 1] - scanData.data[idx + 1]);
-        const bDiff = Math.abs(masterData.data[idx + 2] - scanData.data[idx + 2]);
-        cellTotalDiff += (rDiff + gDiff + bDiff) / 3;
-        cellPixelCount++;
+  const gridSize = 4;
+  const cellWidth = Math.floor(width / gridSize);
+  const cellHeight = Math.floor(height / gridSize);
+  let totalSimilarity = 0;
+  let validCells = 0;
+  let mismatchedCellsCount = 0;
+  const MISMATCH_THRESHOLD = 12; // MUST MATCH generateDiffImage threshold!
+  const cellDifferenceDetails: { row: number; col: number; diffPercent: number }[] = [];
+  
+  for (let row = 0; row < gridSize; row++) {
+    for (let col = 0; col < gridSize; col++) {
+      const startX = col * cellWidth;
+      const startY = row * cellHeight;
+      const endX = Math.min(startX + cellWidth, width);
+      const endY = Math.min(startY + cellHeight, height);
+      
+      let cellTotalDiff = 0;
+      let cellPixelCount = 0;
+      
+      for (let y = startY; y < endY; y++) {
+        for (let x = startX; x < endX; x++) {
+          const idx = (y * width + x) * 4;
+          const rDiff = Math.abs(masterData.data[idx] - scanData.data[idx]);
+          const gDiff = Math.abs(masterData.data[idx + 1] - scanData.data[idx + 1]);
+          const bDiff = Math.abs(masterData.data[idx + 2] - scanData.data[idx + 2]);
+          cellTotalDiff += (rDiff + gDiff + bDiff) / 3;
+          cellPixelCount++;
+        }
+      }
+      
+      const avgCellDiff = cellPixelCount > 0 ? cellTotalDiff / cellPixelCount : 0;
+      // Convert to percentage (0-255 range to 0-100%)
+      const diffPercent = (avgCellDiff / 255) * 100;
+      const cellSimilarity = Math.max(0, 100 - diffPercent);
+      
+      totalSimilarity += cellSimilarity;
+      validCells++;
+      
+      // Store all cell differences for debugging
+      cellDifferenceDetails.push({ row, col, diffPercent });
+      
+      // Use SAME threshold as generateDiffImage
+      if (diffPercent > MISMATCH_THRESHOLD) {
+        mismatchedCellsCount++;
       }
     }
-    
-    const avgCellDiff = cellPixelCount > 0 ? cellTotalDiff / cellPixelCount : 0;
-    // Convert to percentage (0-255 range to 0-100%)
-    const diffPercent = (avgCellDiff / 255) * 100;
-    const cellSimilarity = Math.max(0, 100 - diffPercent);
-    
-    totalSimilarity += cellSimilarity;
-    validCells++;
-    
-    // ONLY mark as mismatch if difference is above 15%
-    if (diffPercent > 7) {
-      mismatchedCellsCount++;
-    }
   }
-}
-
-const similarity = validCells > 0 ? totalSimilarity / validCells : 0;
+  
+  console.log(`📊 Cell differences:`, cellDifferenceDetails);
+  console.log(`📊 Mismatched cells (threshold ${MISMATCH_THRESHOLD}%): ${mismatchedCellsCount}/16`);
+  
+  const similarity = validCells > 0 ? totalSimilarity / validCells : 0;
   const ssimScore = similarity / 100;
   
   // ============================================================
@@ -926,17 +934,28 @@ const similarity = validCells > 0 ? totalSimilarity / validCells : 0;
   let masterText = '';
   let scanText = '';
   let ocrErrors: any[] = [];
-  
+
   try {
     console.log('🔍 Running OCR with Tesseract.js...');
     const worker = await createWorker('eng');
     
-    const masterOcr = await worker.recognize(masterCanvas);
-    const scanOcr = await worker.recognize(scanCanvas);
+    const masterOcrResult = await worker.recognize(masterCanvas);
+    const scanOcrResult = await worker.recognize(scanCanvas);
     await worker.terminate();
     
-    masterText = masterOcr.data.text.trim();
-    scanText = scanOcr.data.text.trim();
+    let rawMasterText = masterOcrResult.data.text.trim();
+    let rawScanText = scanOcrResult.data.text.trim();
+    
+    // Filter out garbage OCR text
+    const isValidText = (text: string) => {
+      if (!text || text.length < 10) return false;
+      const letterCount = (text.match(/[a-zA-Z]/g) || []).length;
+      const wordCount = text.split(/\s+/).filter(w => w.length > 2).length;
+      return letterCount > 5 && wordCount > 1;
+    };
+    
+    masterText = isValidText(rawMasterText) ? rawMasterText : '';
+    scanText = isValidText(rawScanText) ? rawScanText : '';
     
     const maxLen = Math.max(masterText.length, scanText.length);
     if (maxLen > 0) {
@@ -956,7 +975,7 @@ const similarity = validCells > 0 ? totalSimilarity / validCells : 0;
         severity: ocrScore < 70 ? 'high' : 'medium',
         master_text: masterText.substring(0, 100),
         scan_text: scanText.substring(0, 100),
-        confidence: scanOcr.data.confidence
+        confidence: scanOcrResult.data.confidence
       });
     }
     
@@ -969,23 +988,24 @@ const similarity = validCells > 0 ? totalSimilarity / validCells : 0;
   // Barcode score based on grid similarity
   const barcodeScore = similarity > 90 ? 98 : similarity > 80 ? 85 : 70;
   
-  // Calculate overall score
+  // Calculate overall score - LOWER WEIGHT on structural differences
   const overallScore = (
-    ocrScore * 0.20 + 
-    colorScore * 0.20 + 
+    ocrScore * 0.25 + 
+    colorScore * 0.25 + 
     similarity * 0.20 + 
-    barcodeScore * 0.20 + 
-    pantoneMatchScore * 0.20
+    barcodeScore * 0.15 + 
+    pantoneMatchScore * 0.15
   );
   
-  // Generate defects based on mismatched cells
+  // Generate defects based on mismatched cells (use actual count)
   const defects = [];
   if (mismatchedCellsCount > 0) {
     defects.push({
       type: 'structural_diff',
-      severity: mismatchedCellsCount > 8 ? 'critical' : mismatchedCellsCount > 4 ? 'warning' : 'minor',
+      severity: mismatchedCellsCount > 10 ? 'critical' : mismatchedCellsCount > 6 ? 'warning' : 'minor',
       description: `${mismatchedCellsCount} of 16 sections (${Math.round(mismatchedCellsCount / 16 * 100)}%) differ from master`,
-      area_pixels: mismatchedCellsCount
+      area_pixels: mismatchedCellsCount,
+      cell_details: cellDifferenceDetails
     });
   }
   
@@ -993,7 +1013,7 @@ const similarity = validCells > 0 ? totalSimilarity / validCells : 0;
     defects.push({
       type: 'color_shift',
       severity: colorDiff > colorThreshold * 20 ? 'critical' : 'warning',
-      description: `Color difference detected`,
+      description: `Color difference detected (ΔE: ${colorDiff.toFixed(2)})`,
       delta_e: colorDiff
     });
   }
@@ -1011,30 +1031,29 @@ const similarity = validCells > 0 ? totalSimilarity / validCells : 0;
     }
   }
   
-  console.log(`✅ Analysis complete - Overall Score: ${overallScore.toFixed(1)}%, Mismatched cells: ${mismatchedCellsCount}/16`);
+  console.log(`✅ Analysis complete - Overall Score: ${overallScore.toFixed(1)}%, Mismatched cells: ${mismatchedCellsCount}/16, Color ΔE: ${colorDiff.toFixed(2)}`);
   
   return {
-  overall_score: Math.round(overallScore),
-  ocr_score: Math.round(ocrScore),
-  color_score: Math.round(colorScore),
-  ssim_score: ssimScore,
-  barcode_score: Math.round(barcodeScore),
-  pantone_match_score: Math.round(pantoneMatchScore),
-  alignment_confidence: similarity / 100,
-  ocr_errors: ocrErrors,
-  defects: defects,
-  master_text: masterText.substring(0, 200),
-  scan_text: scanText.substring(0, 200),
-  similarity: similarity,
-  mismatched_cells: mismatchedCellsCount,
-  // FIX: Remove cellSimilarities if not defined, or define it properly
-  // cell_similarities: cellSimilarities,  // COMMENT THIS OUT - it's not defined!
-  master_pantone_colors: masterPantoneColors,
-  scan_pantone_colors: scanPantoneColors,
-  pantone_comparisons: pantoneComparisons
-};
+    overall_score: Math.round(overallScore),
+    ocr_score: Math.round(ocrScore),
+    color_score: Math.round(colorScore),
+    ssim_score: ssimScore,
+    barcode_score: Math.round(barcodeScore),
+    pantone_match_score: Math.round(pantoneMatchScore),
+    alignment_confidence: similarity / 100,
+    ocr_errors: ocrErrors,
+    defects: defects,
+    master_text: masterText.substring(0, 200),
+    scan_text: scanText.substring(0, 200),
+    similarity: similarity,
+    mismatched_cells: mismatchedCellsCount,
+    cell_differences: cellDifferenceDetails,
+    master_pantone_colors: masterPantoneColors,
+    scan_pantone_colors: scanPantoneColors,
+    pantone_comparisons: pantoneComparisons,
+    color_delta_e: colorDiff
+  };
 }
-
   // Helper function to convert File to Base64
   const fileToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -1464,12 +1483,13 @@ export function ResultPage() {
     return { masterBase64, scanBase64 };
   };
 
-  // Generate difference image with highlighted areas
-  // Generate difference image with 16-piece grid comparison
-// Generate difference image with 16-piece grid comparison (THIN RED BORDERS ONLY)
-// Generate difference image with 16-piece grid comparison - FIXED THRESHOLD
-// Generate difference image - ONLY red dotted borders around mismatched sections (NO grid lines)
-// SENSITIVE VERSION - Detects differences as low as 1%
+
+// Initialize OpenAI
+const openai = new OpenAI({
+  apiKey: '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',
+  dangerouslyAllowBrowser: true
+});
+
 const generateDiffImage = async (masterBase64: string, scanBase64: string): Promise<string> => {
   return new Promise((resolve) => {
     const masterImg = new Image();
@@ -1480,11 +1500,13 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
       loadedCount++;
       if (loadedCount === 2) {
         try {
-          console.log('🖼️ Generating diff image - SENSITIVE MODE');
+          const gridSize = 6;
+          const DIFF_THRESHOLD = 14; // Only show cells with >8% difference
           
-          const gridSize = 4;
           const cellWidth = Math.floor(scanImg.width / gridSize);
           const cellHeight = Math.floor(scanImg.height / gridSize);
+          
+          console.log(`🖼️ Generating diff image with ${gridSize}x${gridSize} grid (showing ALL mismatched cells)`);
           
           const canvas = document.createElement('canvas');
           canvas.width = scanImg.width;
@@ -1515,10 +1537,10 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
             return;
           }
           
-          // MORE SENSITIVE: Compare cells with 2% threshold (not 12%!)
           const mismatchedCells: { row: number; col: number; diffPercent: number; x: number; y: number; w: number; h: number }[] = [];
           let totalDiffAllCells = 0;
           
+          // Loop through EACH cell independently - no adjacency checking
           for (let row = 0; row < gridSize; row++) {
             for (let col = 0; col < gridSize; col++) {
               const startX = col * cellWidth;
@@ -1545,11 +1567,10 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
               const avgDiff = pixelCount > 0 ? totalDiff / pixelCount : 0;
               const diffPercent = (avgDiff / 255) * 100;
               
-              console.log(`Cell [${row},${col}] difference: ${diffPercent.toFixed(2)}%`);
+              console.log(`Cell [${row},${col}] difference: ${diffPercent.toFixed(2)}% - ${diffPercent > DIFF_THRESHOLD ? '❌ MISMATCH' : '✓ OK'}`);
               
-              // MUCH MORE SENSITIVE: ANY difference above 1.5% triggers a mismatch
-              // This is 8x more sensitive than before (was 12%)
-              if (diffPercent > 1.5) {
+              // INDEPENDENT CHECK - each cell stands alone
+              if (diffPercent > DIFF_THRESHOLD) {
                 mismatchedCells.push({ 
                   row, col, diffPercent,
                   x: startX, y: startY, w: cellWidth, h: cellHeight
@@ -1560,50 +1581,78 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
             }
           }
           
-          const avgDiffPercent = totalDiffAllCells / 16;
-          console.log(`Average difference across all cells: ${avgDiffPercent.toFixed(2)}%`);
-          console.log(`Found ${mismatchedCells.length} cells with >1.5% difference`);
+          const avgDiffPercent = totalDiffAllCells / (gridSize * gridSize);
+          console.log(`📊 RESULTS: ${mismatchedCells.length} cells with >${DIFF_THRESHOLD}% difference (out of ${gridSize * gridSize} cells)`);
+          console.log(`📍 Mismatched cell positions:`, mismatchedCells.map(c => `[${c.row},${c.col}]`).join(', '));
           
           setDifferenceCount(mismatchedCells.length);
           
           ctx.save();
           
-          // Draw RED dotted borders on mismatched cells
+          // Draw VERY THIN grid lines for reference
+          ctx.beginPath();
+          ctx.strokeStyle = 'rgba(150, 150, 150, 0.3)';
+          ctx.lineWidth = 0.5;
+          
+          // Draw vertical grid lines
+          for (let i = 1; i < gridSize; i++) {
+            ctx.beginPath();
+            ctx.moveTo(i * cellWidth, 0);
+            ctx.lineTo(i * cellWidth, scanImg.height);
+            ctx.stroke();
+          }
+          
+          // Draw horizontal grid lines
+          for (let i = 1; i < gridSize; i++) {
+            ctx.beginPath();
+            ctx.moveTo(0, i * cellHeight);
+            ctx.lineTo(scanImg.width, i * cellHeight);
+            ctx.stroke();
+          }
+          
+          // Draw RED highlights on EVERY mismatched cell (no grouping, each cell independent)
           for (const cell of mismatchedCells) {
+            // Semi-transparent red fill
+            ctx.fillStyle = 'rgba(255, 0, 0, 0.25)';
+            ctx.fillRect(cell.x, cell.y, cell.w, cell.h);
+            
+            // Red dotted border
             ctx.beginPath();
             ctx.strokeStyle = '#FF0000';
-            ctx.lineWidth = 3;
-            ctx.setLineDash([6, 6]);
+            ctx.lineWidth = 2;
+            ctx.setLineDash([4, 4]);
             ctx.strokeRect(cell.x, cell.y, cell.w, cell.h);
             
-            // Add difference percentage label
-            ctx.font = 'bold 14px Arial';
+            // Difference percentage label
+            ctx.font = 'bold 10px Arial';
             ctx.fillStyle = '#FF0000';
             ctx.setLineDash([]);
             ctx.shadowBlur = 0;
-            const label = `${cell.diffPercent.toFixed(1)}%`;
+            const label = `${cell.diffPercent.toFixed(0)}%`;
             const textWidth = ctx.measureText(label).width;
             ctx.fillStyle = 'rgba(0,0,0,0.7)';
-            ctx.fillRect(cell.x + 5, cell.y + 5, textWidth + 8, 20);
+            ctx.fillRect(cell.x + 3, cell.y + 3, textWidth + 6, 14);
             ctx.fillStyle = '#FF0000';
-            ctx.fillText(label, cell.x + 9, cell.y + 20);
+            ctx.fillText(label, cell.x + 6, cell.y + 13);
           }
           
           // Add summary overlay
-          ctx.font = 'bold 13px Arial';
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
-          ctx.fillRect(8, 8, 320, 55);
+          ctx.font = 'bold 11px Arial';
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+          ctx.fillRect(8, 8, 350, 65);
           
           if (mismatchedCells.length > 0) {
             ctx.fillStyle = '#FF4444';
-            ctx.fillText(`⚠️ ${mismatchedCells.length} SECTION(S) WITH DIFFERENCES`, 12, 28);
-            ctx.font = '11px Arial';
+            ctx.fillText(`⚠️ ${mismatchedCells.length} OF ${gridSize * gridSize} CELLS WITH DIFFERENCES`, 12, 23);
+            ctx.font = '9px Arial';
             ctx.fillStyle = '#FF8888';
-            ctx.fillText(`Average difference: ${avgDiffPercent.toFixed(1)}%`, 12, 48);
+            ctx.fillText(`Threshold: >${DIFF_THRESHOLD}% | Avg diff: ${avgDiffPercent.toFixed(1)}%`, 12, 38);
+            ctx.fillStyle = '#FFAA66';
+            ctx.fillText(`Mismatched positions: ${mismatchedCells.map(c => `${c.row},${c.col}`).join('  ')}`, 12, 53);
           } else {
             ctx.fillStyle = '#22A06B';
-            ctx.fillText(`✓ NO DIFFERENCES DETECTED`, 12, 28);
-            ctx.font = '11px Arial';
+            ctx.fillText(`✓ NO DIFFERENCES DETECTED (${gridSize}x${gridSize} grid)`, 12, 28);
+            ctx.font = '9px Arial';
             ctx.fillStyle = '#888888';
             ctx.fillText(`Average difference: ${avgDiffPercent.toFixed(1)}%`, 12, 48);
           }
@@ -1680,32 +1729,44 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
       format: 'a4'
     });
 
-    const score = job.overall_score || 89;
+    const score = job.overall_score || 0;
     const isPass = score >= 75;
     const productName = job.productType || 'Inspection Report';
     const jobDate = job.createdAt ? formatDate(job.createdAt) : new Date().toLocaleString();
     
-    const alignmentConf = ((job.alignment_confidence || 0.947) * 100).toFixed(0);
-    const ssimSimilarity = ((job.ssim_score || 0.894) * 100).toFixed(1);
-    const differencesFound = job.defects?.length || job.ocr_errors?.length || differenceCount || 90;
-    const meanColorDelta = (job.color_diff_avg || (job.color_score ? (100 - job.color_score) / 2 : 4.646)).toFixed(3);
-    const pantoneMatch = job.pantone_match_score || 85;
+    const alignmentConf = ((job.alignment_confidence || 0) * 100).toFixed(0);
+    const ssimSimilarity = ((job.ssim_score || 0) * 100).toFixed(1);
     
-    // ============================================================
-    // PAGE 1 - SCORE, SUMMARY, AND ONE PANTONE TABLE
-    // ============================================================
+    // Use differenceCount from component state (matches web screen)
+    let differencesFound = differenceCount;
     
-    // BLACK BAR HEADER
+    // Also check defects and OCR errors for additional context
+    if (differencesFound === 0 && job.defects?.length) {
+      differencesFound = job.defects.length;
+    }
+    if (differencesFound === 0 && job.ocr_errors?.length) {
+      differencesFound = job.ocr_errors.length;
+    }
+    
+    // If score is 100, force differences to 0
+    if (score >= 99.5) {
+      differencesFound = 0;
+    }
+    
+    const meanColorDelta = (job.color_diff_avg || (job.color_score ? (100 - job.color_score) / 2 : 0)).toFixed(3);
+    const pantoneMatch = job.pantone_match_score || 0;
+    
+    // PAGE 1 - HEADER
     pdf.setFillColor(13, 27, 42);
     pdf.rect(0, 0, pdf.internal.pageSize.getWidth(), 14, 'F');
     pdf.setFontSize(10);
     pdf.setFont('helvetica', 'bold');
     pdf.setTextColor(255, 255, 255);
-    pdf.text('GREENPACK PRO — INSPECTION REPORT', pdf.internal.pageSize.getWidth() / 2, 9, { align: 'center' });
+    pdf.text('GREENPACK PRO - INSPECTION REPORT', pdf.internal.pageSize.getWidth() / 2, 9, { align: 'center' });
     
-    // TOP SCORE BOX
+    // SCORE BOX
     const scoreText = `${Math.round(score)}`;
-    const statusText = isPass ? 'PASS' : 'REVIEW REQUIRED';
+    const statusText = isPass ? 'PASS' : 'FAIL';
     
     const boxWidth = 180;
     const boxHeight = 35;
@@ -1729,29 +1790,28 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
     pdf.setTextColor(120, 120, 120);
     pdf.text(`${productName} - Master vs Printed Sample`, pdf.internal.pageSize.getWidth() / 2, boxY + boxHeight + 8, { align: 'center' });
     
-    let currentY = boxY + boxHeight + 18;
+    let yPos = boxY + boxHeight + 18;
     
-    // INSPECTION SUMMARY
+    // INSPECTION SUMMARY TABLE
     pdf.setFontSize(12);
     pdf.setFont('helvetica', 'bold');
     pdf.setTextColor(13, 27, 42);
-    pdf.text('Inspection Summary', 15, currentY);
-    currentY += 3;
+    pdf.text('Inspection Summary', 15, yPos);
+    yPos += 3;
     
     pdf.setDrawColor(135, 206, 235);
-    pdf.setLineWidth(0.5);
-    pdf.line(15, currentY, pdf.internal.pageSize.getWidth() - 15, currentY);
-    currentY += 6;
+    pdf.line(15, yPos, pdf.internal.pageSize.getWidth() - 15, yPos);
+    yPos += 6;
     
     const summaryData = [
-      ['Date', jobDate, 'Alignment Confidence', `${alignmentConf}%`],
-      ['SSIM Similarity', `${ssimSimilarity}%`, 'Differences Found', differencesFound],
-      ['Mean Color ΔE', meanColorDelta, 'Pantone Match', `${pantoneMatch}%`],
-      ['OCR Score', `${job.ocr_score || '—'}%`, 'Color Score', `${job.color_score || '—'}%`]
+      ['Date', jobDate, 'Overall Score', `${Math.round(score)}%`],
+      ['OCR Score', `${job.ocr_score || '---'}%`, 'Color Score', `${job.color_score || '---'}%`],
+      ['Pantone Match', `${job.pantone_match_score || '---'}%`, 'Differences Found', `${differencesFound}`],
+      ['Status', isPass ? 'PASS' : 'FAIL', '', '']
     ];
     
     autoTable(pdf, {
-      startY: currentY,
+      startY: yPos,
       body: summaryData,
       theme: 'plain',
       styles: {
@@ -1763,288 +1823,147 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
       columnStyles: {
         0: { fontStyle: 'bold', textColor: [80, 80, 80], cellWidth: 50, halign: 'center' },
         1: { fontStyle: 'bold', textColor: [13, 27, 42], cellWidth: 70, halign: 'center' },
-        2: { fontStyle: 'bold', textColor: [80, 80, 80], cellWidth: 60, halign: 'center' },
+        2: { fontStyle: 'bold', textColor: [80, 80, 80], cellWidth: 50, halign: 'center' },
         3: { fontStyle: 'bold', textColor: [13, 27, 42], cellWidth: 70, halign: 'center' }
       },
       margin: { left: 15, right: 15 },
       alternateRowStyles: { fillColor: [249, 250, 251] },
     });
     
-    currentY = (pdf as any).lastAutoTable.finalY + 12;
+    yPos = (pdf as any).lastAutoTable.finalY + 12;
     
     // ============================================================
-    // ONE SINGLE COMBINED PANTONE TABLE - FORCED TO STAY ON PAGE 1
+    // REAL DIFFERENCES DETECTED - PLAIN TEXT VERSION
     // ============================================================
-    
-    // FIRST, check if we have enough space on page 1
-    const estimatedTableHeight = 60; // Rough estimate for 5 rows of Pantone table
-    const pageRemainingHeight = pdf.internal.pageSize.getHeight() - currentY - 20; // 20mm margin at bottom
-    
-    // If not enough space, start a new page BEFORE drawing the Pantone table
-    if (pageRemainingHeight < estimatedTableHeight) {
-      pdf.addPage();
-      pdf.setFillColor(13, 27, 42);
-      pdf.rect(0, 0, pdf.internal.pageSize.getWidth(), 14, 'F');
-      pdf.setFontSize(10);
-      pdf.setFont('helvetica', 'bold');
-      pdf.setTextColor(255, 255, 255);
-      pdf.text('GREENPACK PRO — INSPECTION REPORT', pdf.internal.pageSize.getWidth() / 2, 9, { align: 'center' });
-      currentY = 28;
-    }
-    
     pdf.setFontSize(12);
     pdf.setFont('helvetica', 'bold');
     pdf.setTextColor(13, 27, 42);
-    pdf.text('Identified Brand Color Palette (PANTONE)', 15, currentY);
-    currentY += 3;
+    pdf.text('Real Differences Detected', 15, yPos);
+    yPos += 3;
     
     pdf.setDrawColor(135, 206, 235);
-    pdf.line(15, currentY, pdf.internal.pageSize.getWidth() - 15, currentY);
-    currentY += 6;
-    
-    // Get colors from the job
-    const masterColors = job.master_pantone_colors || [];
-    const scanColors = job.scan_pantone_colors || [];
-    
-    // Create ONE combined table
-    const combinedTableData = [];
-    const maxRows = Math.max(masterColors.length, scanColors.length);
-    
-    for (let i = 0; i < Math.min(maxRows, 8); i++) { // Limit to 8 rows to fit on one page
-      const masterColor = masterColors[i];
-      const scanColor = scanColors[i];
-      
-      combinedTableData.push([
-        '', // Master swatch
-        masterColor?.best_match_code || '—',
-        masterColor?.best_match_delta_e?.toFixed(1) || '—',
-        masterColor?.hex?.toUpperCase() || '—',
-        masterColor?.match_confidence?.replace('_', ' ').toUpperCase() || '—',
-        '', // Printed swatch
-        scanColor?.best_match_code || '—',
-        scanColor?.best_match_delta_e?.toFixed(1) || '—',
-        scanColor?.hex?.toUpperCase() || '—',
-        scanColor?.match_confidence?.replace('_', ' ').toUpperCase() || '—'
-      ]);
-    }
-    
-    // Draw the table - it will NOT create a new page because we ensured space above
-    autoTable(pdf, {
-      startY: currentY,
-      head: [
-        [
-          '', 'Master PMS', 'Master ΔE', 'Master Hex', 'Confidence',
-          '', 'Printed PMS', 'Printed ΔE', 'Printed Hex', 'Confidence'
-        ]
-      ],
-      body: combinedTableData,
-      theme: 'striped',
-      styles: {
-        fontSize: 7,
-        cellPadding: { top: 3, bottom: 3, left: 2, right: 2 },
-        halign: 'center',
-        valign: 'middle',
-      },
-      headStyles: {
-        fillColor: [13, 27, 42],
-        textColor: [255, 255, 255],
-        fontSize: 8,
-        fontStyle: 'bold',
-        halign: 'center',
-      },
-      alternateRowStyles: { fillColor: [249, 250, 251] },
-      columnStyles: {
-        0: { cellWidth: 10 },
-        1: { cellWidth: 32 },
-        2: { cellWidth: 20 },
-        3: { cellWidth: 30 },
-        4: { cellWidth: 28 },
-        5: { cellWidth: 10 },
-        6: { cellWidth: 32 },
-        7: { cellWidth: 20 },
-        8: { cellWidth: 30 },
-        9: { cellWidth: 28 },
-      },
-      margin: { left: 12, right: 12 },
-      pageBreak: 'avoid', // THIS PREVENTS AUTO PAGE BREAK!
-      didDrawCell: (data) => {
-        // Master swatch column
-        if (data.column.index === 0 && data.row.section === 'body' && data.cell.section === 'body') {
-          const colorData = masterColors[data.row.index];
-          if (colorData && colorData.hex) {
-            const x = data.cell.x + 1.5;
-            const y = data.cell.y + 2;
-            const width = 8;
-            const height = 8;
-            
-            pdf.setFillColor(
-              parseInt(colorData.hex.slice(1, 3), 16),
-              parseInt(colorData.hex.slice(3, 5), 16),
-              parseInt(colorData.hex.slice(5, 7), 16)
-            );
-            pdf.rect(x, y, width, height, 'F');
-            pdf.setDrawColor(180, 180, 180);
-            pdf.rect(x, y, width, height, 'S');
-          }
-        }
-        // Printed swatch column
-        if (data.column.index === 5 && data.row.section === 'body' && data.cell.section === 'body') {
-          const colorData = scanColors[data.row.index];
-          if (colorData && colorData.hex) {
-            const x = data.cell.x + 1.5;
-            const y = data.cell.y + 2;
-            const width = 8;
-            const height = 8;
-            
-            pdf.setFillColor(
-              parseInt(colorData.hex.slice(1, 3), 16),
-              parseInt(colorData.hex.slice(3, 5), 16),
-              parseInt(colorData.hex.slice(5, 7), 16)
-            );
-            pdf.rect(x, y, width, height, 'F');
-            pdf.setDrawColor(180, 180, 180);
-            pdf.rect(x, y, width, height, 'S');
-          }
-        }
-      },
-    });
-    
-    // Footer on page 1
-    pdf.setFontSize(7);
-    pdf.setFont('helvetica', 'normal');
-    pdf.setTextColor(120, 120, 120);
-    pdf.text(`Pantone TCX Library • Delta-E CIE2000 • Generated: ${new Date().toLocaleString()}`, pdf.internal.pageSize.getWidth() / 2, pdf.internal.pageSize.getHeight() - 10, { align: 'center' });
-    pdf.text('1', pdf.internal.pageSize.getWidth() / 2, pdf.internal.pageSize.getHeight() - 6, { align: 'center' });
-    
-    // ============================================================
-    // PAGE 2 - REAL DIFFERENCES AND SIDE BY SIDE IMAGES
-    // ============================================================
-    pdf.addPage();
-    
-    // BLACK BAR HEADER
-    pdf.setFillColor(13, 27, 42);
-    pdf.rect(0, 0, pdf.internal.pageSize.getWidth(), 14, 'F');
-    pdf.setFontSize(10);
-    pdf.setFont('helvetica', 'bold');
-    pdf.setTextColor(255, 255, 255);
-    pdf.text('GREENPACK PRO — INSPECTION REPORT', pdf.internal.pageSize.getWidth() / 2, 9, { align: 'center' });
-    
-    let page2Y = 28;
-    
-    // REAL DIFFERENCES DETECTED
-    pdf.setFontSize(12);
-    pdf.setFont('helvetica', 'bold');
-    pdf.setTextColor(13, 27, 42);
-    pdf.text('Real Differences Detected', 15, page2Y);
-    page2Y += 3;
-    
-    pdf.setDrawColor(135, 206, 235);
-    pdf.line(15, page2Y, pdf.internal.pageSize.getWidth() - 15, page2Y);
-    page2Y += 6;
+    pdf.line(15, yPos, pdf.internal.pageSize.getWidth() - 15, yPos);
+    yPos += 6;
     
     const diffMessages = [];
-    if (differenceCount > 500) {
-      diffMessages.push('⚠️ Significant differences detected between master and printed sample');
-      diffMessages.push('Sample shows possible rotational skew or scaling issues');
-    } else if (differenceCount > 100) {
-      diffMessages.push(`Minor pixel variations detected (${differenceCount} total differences)`);
-      diffMessages.push('May be caused by lighting or scanning artifacts');
+    
+    if (score >= 99.5) {
+      diffMessages.push('✓ No differences detected - Label meets quality standards perfectly.');
     } else if (differenceCount > 0) {
-      diffMessages.push('Very minor differences detected - label meets quality standards');
-    } else {
-      diffMessages.push('✓ No significant differences detected - Label meets quality standards');
-    }
-    
-    if (job.defects && job.defects.length > 0) {
-      for (const defect of job.defects.slice(0, 3)) {
-        diffMessages.push(`• ${defect.type.replace('_', ' ')}: ${defect.description}`);
+      // Plain text without special characters
+      diffMessages.push(`[!] ${differenceCount} section(s) show differences from the master label`);
+      if (differenceCount > 5) {
+        diffMessages.push(`    -> Multiple areas of concern detected (${differenceCount} of 16 sections)`);
+      } else if (differenceCount > 2) {
+        diffMessages.push(`    -> Minor variations detected in ${differenceCount} sections`);
+      } else {
+        diffMessages.push(`    -> Very minor differences detected - label meets quality standards`);
       }
-    }
-    
-    if (job.ocr_errors && job.ocr_errors.length > 0) {
+    } else if (job.defects && job.defects.length > 0) {
+      for (const defect of job.defects) {
+        let severityText = '';
+        if (defect.severity === 'critical') severityText = '[CRITICAL]';
+        else if (defect.severity === 'warning') severityText = '[WARNING]';
+        else severityText = '[INFO]';
+        
+        diffMessages.push(`${severityText} ${defect.type.replace('_', ' ').toUpperCase()}: ${defect.description}`);
+        
+        if (defect.delta_e) {
+          diffMessages.push(`    -> Color difference ΔE = ${defect.delta_e.toFixed(1)}`);
+        }
+        if (defect.sections_affected) {
+          diffMessages.push(`    -> ${defect.sections_affected} of 16 sections affected`);
+        }
+      }
+    } else if (job.ocr_errors && job.ocr_errors.length > 0) {
+      diffMessages.push(`[TEXT MISMATCH] Printed text differs from master`);
       for (const err of job.ocr_errors.slice(0, 2)) {
-        diffMessages.push(`• Text mismatch: ${err.master_text?.substring(0, 50)}...`);
+        if (err.master_text) {
+          diffMessages.push(`   Master: "${err.master_text.substring(0, 60)}"`);
+          diffMessages.push(`   Printed: "${err.scan_text?.substring(0, 60) || 'N/A'}"`);
+        }
       }
+    } else {
+      diffMessages.push('✓ No differences detected - Label meets quality standards');
     }
     
-    pdf.setFontSize(8);
+    pdf.setFontSize(9);
     pdf.setFont('helvetica', 'normal');
     pdf.setTextColor(60, 60, 60);
     
     for (const msg of diffMessages) {
       const splitMsg = pdf.splitTextToSize(msg, pdf.internal.pageSize.getWidth() - 30);
-      pdf.text(splitMsg, 20, page2Y);
-      page2Y += splitMsg.length * 5 + 2;
+      pdf.text(splitMsg, 20, yPos);
+      yPos += splitMsg.length * 5 + 2;
     }
     
-    page2Y += 15;
+    // Add page break if needed for images
+    if (yPos > pdf.internal.pageSize.getHeight() - 60) {
+      pdf.addPage();
+      yPos = 28;
+    } else {
+      yPos += 15;
+    }
     
-    // ANNOTATED COMPARISON - Images Side by Side
-    const imgToUse = diffImageUrl || scanImageUrl;
-    if (masterImageUrl && imgToUse) {
+    // IMAGES
+    if (masterImageUrl && (diffImageUrl || scanImageUrl)) {
       pdf.setFontSize(12);
       pdf.setFont('helvetica', 'bold');
       pdf.setTextColor(13, 27, 42);
-      pdf.text('Annotated Comparison', 15, page2Y);
-      page2Y += 3;
+      pdf.text('Image Comparison', 15, yPos);
+      yPos += 3;
       
       pdf.setDrawColor(135, 206, 235);
-      pdf.line(15, page2Y, pdf.internal.pageSize.getWidth() - 15, page2Y);
-      page2Y += 10;
+      pdf.line(15, yPos, pdf.internal.pageSize.getWidth() - 15, yPos);
+      yPos += 10;
       
       try {
-        const masterImgData = await fetch(masterImageUrl).then(res => res.blob());
-        const diffImgData = await fetch(imgToUse).then(res => res.blob());
+        const imgWidth = 90;
+        const imgHeight = 70;
+        const gap = 15;
+        const leftX = (pdf.internal.pageSize.getWidth() - (imgWidth * 2 + gap)) / 2;
+        const rightX = leftX + imgWidth + gap;
         
+        const masterImgData = await fetch(masterImageUrl).then(res => res.blob());
         const masterBase64 = await new Promise<string>((resolve) => {
           const reader = new FileReader();
           reader.onloadend = () => resolve(reader.result as string);
           reader.readAsDataURL(masterImgData);
         });
         
-        const diffBase64 = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onloadend = () => resolve(reader.result as string);
-          reader.readAsDataURL(diffImgData);
-        });
-        
-        const imgWidth = 100;
-        const imgHeight = 85;
-        const gap = 20;
-        const leftX = (pdf.internal.pageSize.getWidth() - (imgWidth * 2 + gap)) / 2;
-        const rightX = leftX + imgWidth + gap;
-        const imagesY = page2Y;
-        
-        pdf.addImage(masterBase64, 'JPEG', leftX, imagesY, imgWidth, imgHeight);
+        pdf.addImage(masterBase64, 'JPEG', leftX, yPos, imgWidth, imgHeight);
         pdf.setFontSize(9);
         pdf.setFont('helvetica', 'bold');
         pdf.setTextColor(34, 160, 107);
-        pdf.text('MASTER LABEL', leftX + imgWidth/2, imagesY + imgHeight + 5, { align: 'center' });
+        pdf.text('MASTER LABEL', leftX + imgWidth/2, yPos + imgHeight + 5, { align: 'center' });
         
-        pdf.addImage(diffBase64, 'JPEG', rightX, imagesY, imgWidth, imgHeight);
-        pdf.setTextColor(229, 56, 59);
-        pdf.text('PRINTED SAMPLE', rightX + imgWidth/2, imagesY + imgHeight + 5, { align: 'center' });
-        
-        if (differenceCount > 0) {
-          pdf.setFontSize(7);
-          pdf.setFont('helvetica', 'italic');
+        const imgToUse = diffImageUrl || scanImageUrl;
+        if (imgToUse) {
+          const scanImgData = await fetch(imgToUse).then(res => res.blob());
+          const scanBase64 = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.readAsDataURL(scanImgData);
+          });
+          
+          pdf.addImage(scanBase64, 'JPEG', rightX, yPos, imgWidth, imgHeight);
           pdf.setTextColor(229, 56, 59);
-          pdf.text(`${differenceCount.toLocaleString()} pixel differences`, rightX + imgWidth/2, imagesY + imgHeight + 11, { align: 'center' });
+          pdf.text('PRINTED SAMPLE', rightX + imgWidth/2, yPos + imgHeight + 5, { align: 'center' });
+          
+          // Show the difference count on the image
+          if (differenceCount > 0) {
+            pdf.setFontSize(7);
+            pdf.setFont('helvetica', 'italic');
+            pdf.setTextColor(229, 56, 59);
+            pdf.text(`${differenceCount} section(s) with differences`, rightX + imgWidth/2, yPos + imgHeight + 11, { align: 'center' });
+          }
         }
-        
       } catch (err) {
-        console.warn('Could not embed images:', err);
-        pdf.text('Unable to load images for preview', pdf.internal.pageSize.getWidth() / 2, page2Y + 50, { align: 'center' });
+        console.error('Could not embed images:', err);
       }
     }
     
-    // Footer on page 2
-    pdf.setFontSize(7);
-    pdf.setFont('helvetica', 'normal');
-    pdf.setTextColor(120, 120, 120);
-    pdf.text('2', pdf.internal.pageSize.getWidth() / 2, pdf.internal.pageSize.getHeight() - 6, { align: 'center' });
-    
-    pdf.save(`${productName.replace(/\s+/g, '_')}_Report_${new Date().toISOString().split('T')[0]}.pdf`);
+    pdf.save(`${productName.replace(/\s+/g, '_')}_Report.pdf`);
     toast.success('PDF report generated!', { id: 'pdf-gen' });
     
   } catch (error) {
@@ -2052,7 +1971,6 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
     toast.error('Failed to generate PDF', { id: 'pdf-gen' });
   }
 }
-
   async function downloadExcel() {
     if (!job) return;
     const headers = ['Job Number', 'Customer', 'Product', 'Overall Score', 'OCR Score', 'Color Score', 'Pantone Match', 'SSIM Score', 'Status', 'Date'];
@@ -2326,31 +2244,76 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
           </div>
         )}
 
-        {/* Real Differences Detected */}
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-          <div className="px-3 py-1.5 bg-gray-50 border-b border-gray-100 font-semibold text-xs">
-            Real Differences Detected
-          </div>
-          <div className="p-3">
-            <ol className="list-decimal list-inside space-y-1 text-xs text-gray-700">
-              {differenceCount > 500 ? (
-                <>
-                  <li className="text-red-600 font-medium">⚠️ Significant differences detected between master and printed sample</li>
-                  <li>Sample shows possible rotational skew or scaling issues</li>
-                </>
-              ) : differenceCount > 100 ? (
-                <>
-                  <li>Minor pixel variations detected ({differenceCount} total differences)</li>
-                  <li>May be caused by lighting or scanning artifacts</li>
-                </>
-              ) : differenceCount > 0 ? (
-                <li>Very minor differences detected - label meets quality standards</li>
-              ) : (
-                <li className="text-green-600">✓ No significant differences detected - Label meets quality standards</li>
-              )}
-            </ol>
-          </div>
-        </div>
+        {/* Real Differences Detected - WITH REAL DATA */}
+<div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+  <div className="px-3 py-1.5 bg-gray-50 border-b border-gray-100 font-semibold text-xs">
+    Real Differences Detected
+  </div>
+  <div className="p-3">
+    {job.defects && job.defects.length > 0 ? (
+      <ul className="space-y-2">
+        {job.defects.map((defect: any, idx: number) => (
+          <li key={idx} className="text-xs border-l-3 pl-2" style={{ borderLeftColor: 
+            defect.severity === 'critical' ? '#E5383B' : 
+            defect.severity === 'warning' ? '#F4A22D' : '#1A73E8',
+            borderLeftWidth: '3px', borderLeftStyle: 'solid'
+          }}>
+            <span className="font-semibold">
+              {defect.type === 'structural_diff' ? '📐 Layout Difference' :
+               defect.type === 'color_shift' ? '🎨 Color Shift' :
+               defect.type === 'pantone_mismatch' ? '🎨 Pantone Mismatch' :
+               defect.type === 'text_mismatch' ? '📝 Text Mismatch' : defect.type}
+            </span>
+            <p className="text-gray-600 mt-0.5">{defect.description}</p>
+            {defect.delta_e && (
+              <p className="text-[10px] text-gray-400 mt-0.5">ΔE: {defect.delta_e.toFixed(2)}</p>
+            )}
+            {defect.mismatches && defect.mismatches.length > 0 && (
+              <div className="mt-1">
+                {defect.mismatches.map((m: any, mi: number) => (
+                  <span key={mi} className="inline-block text-[10px] bg-red-50 text-red-600 px-1.5 py-0.5 rounded mr-1">
+                    {m.master_pms} → {m.scan_pms}
+                  </span>
+                ))}
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+    ) : job.ocr_errors && job.ocr_errors.length > 0 ? (
+      <ul className="space-y-2">
+        {job.ocr_errors.slice(0, 3).map((err: any, idx: number) => (
+          <li key={idx} className="text-xs border-l-3 pl-2" style={{ borderLeftColor: '#F4A22D', borderLeftWidth: '3px', borderLeftStyle: 'solid' }}>
+            <span className="font-semibold">📝 Text Mismatch</span>
+            <p className="text-gray-600 mt-0.5">OCR confidence: {err.confidence?.toFixed(1)}%</p>
+            <p className="text-[10px] text-gray-500 mt-1">
+              <span className="font-mono">Master: "{err.master_text?.substring(0, 60)}..."</span><br />
+              <span className="font-mono">Scan: "{err.scan_text?.substring(0, 60)}..."</span>
+            </p>
+          </li>
+        ))}
+      </ul>
+    ) : differenceCount > 0 ? (
+      <div className="text-xs text-gray-600">
+        <p className="font-semibold text-amber-600">⚠️ {differenceCount} section(s) show differences</p>
+        <p className="mt-1">The printed sample has {differenceCount} areas that differ from the master label.</p>
+        <p className="text-[10px] text-gray-400 mt-2">See the red dotted boxes in the image comparison above.</p>
+      </div>
+    ) : (
+      <p className="text-xs text-green-600">✓ No differences detected - Label meets quality standards</p>
+    )}
+    
+    {/* Summary stats */}
+    {(job.defects?.length > 0 || job.ocr_errors?.length > 0 || differenceCount > 0) && (
+      <div className="mt-3 pt-2 border-t border-gray-100 text-[10px] text-gray-400">
+        <span>Total issues found: </span>
+        <span className="font-bold text-red-500">
+          {(job.defects?.length || 0) + (job.ocr_errors?.length || 0) + (differenceCount > 0 ? 1 : 0)}
+        </span>
+      </div>
+    )}
+  </div>
+</div>
 
         {/* Images at the BOTTOM of the page */}
 {(masterImageUrl || scanImageUrl) && (
