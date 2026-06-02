@@ -1446,53 +1446,7 @@ function LabelDetailModal({ label, onClose }: any) {
             <MiniScore label="Alignment" value={label.registration?.offset_px ? 100 - Math.min(100, label.registration.offset_px / 2) : null} suffix="%" />
           </div>
 
-          {/* Real OCR Errors from Tesseract.js - FIXED TEXT COLOR */}
-          {label.ocr_errors?.length > 0 && (
-            <div>
-              <h3 className="font-semibold text-sm mb-2 text-[#0D1B2A]">
-                Real OCR Errors ({label.ocr_errors.length})
-              </h3>
-              <div className="space-y-2">
-                {label.ocr_errors.slice(0, 10).map((err: any, i: number) => (
-                  <div key={i} className={clsx(
-                    'p-3 rounded-lg border text-sm',
-                    err.severity === 'high' ? 'bg-red-50 border-red-200' : 'bg-yellow-50 border-yellow-200'
-                  )}>
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-xs font-bold px-2 py-0.5 bg-white rounded text-gray-700">
-                        {err.type}
-                      </span>
-                      <span className={clsx(
-                        'text-xs font-medium',
-                        err.severity === 'high' ? 'text-red-700' : 'text-yellow-700'
-                      )}>
-                        {err.severity.toUpperCase()}
-                      </span>
-                    </div>
-                    <div className="font-mono text-xs space-y-1">
-                      <div className="text-gray-700">
-                        Master: <span className="font-bold text-green-700">"{err.master_text?.substring(0, 100) || 'N/A'}"</span>
-                      </div>
-                      <div className="text-gray-700">
-                        Scan: <span className="font-bold text-red-700">"{err.scan_text?.substring(0, 100) || 'N/A'}"</span>
-                      </div>
-                      {err.confidence && (
-                        <div className="text-gray-500">
-                          OCR Confidence: <span className="font-medium">{err.confidence.toFixed(1)}%</span>
-                        </div>
-                      )}
-                    </div>
-                    <button 
-                      onClick={() => copyToClipboard(err.master_text)}
-                      className="mt-2 text-xs text-blue-500 hover:text-blue-700 flex items-center gap-1"
-                    >
-                      <Copy size={10} /> Copy master text
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          
 
           {/* Defects - FIXED TEXT COLOR */}
           {label.defects?.length > 0 && (
