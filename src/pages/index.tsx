@@ -2823,47 +2823,47 @@ export function TemplatesPage() {
               >
                 <input {...drop.getInputProps()} />
                 {templatePreview ? (
-                  <div className="space-y-2">
-                    <img 
-                      src={templatePreview} 
-                      alt="Preview" 
-                      className="w-32 h-32 object-contain mx-auto rounded-lg"
-                    />
-                    <p className="text-sm text-green-700 font-medium">{templateFile?.name}</p>
-                    <p className="text-xs text-gray-500">
-                      {(templateFile?.size / 1024).toFixed(0)} KB
-                    </p>
-                    <button 
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setTemplateFile(null);
-                        setTemplatePreview(null);
-                      }}
-                      className="text-xs text-red-500 hover:underline"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                ) : templateFile ? (
-                  <div className="space-y-2">
-                    <div className="text-3xl">📄</div>
-                    <p className="text-sm text-green-700 font-medium">{templateFile.name}</p>
-                    <p className="text-xs text-gray-500">
-                      {(templateFile.size / 1024).toFixed(0)} KB
-                    </p>
-                    <button 
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setTemplateFile(null);
-                      }}
-                      className="text-xs text-red-500 hover:underline"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                ) : (
+  <div className="space-y-2">
+    <img 
+      src={templatePreview} 
+      alt="Preview" 
+      className="w-32 h-32 object-contain mx-auto rounded-lg"
+    />
+    <p className="text-sm text-green-700 font-medium">{templateFile?.name || 'Image uploaded'}</p>
+    <p className="text-xs text-gray-500">
+      {templateFile?.size ? (templateFile.size / 1024).toFixed(0) : 0} KB
+    </p>
+    <button 
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        setTemplateFile(null);
+        setTemplatePreview(null);
+      }}
+      className="text-xs text-red-500 hover:underline"
+    >
+      Remove
+    </button>
+  </div>
+) : templateFile ? (
+  <div className="space-y-2">
+    <div className="text-3xl">📄</div>
+    <p className="text-sm text-green-700 font-medium">{templateFile.name}</p>
+    <p className="text-xs text-gray-500">
+      {templateFile.size ? (templateFile.size / 1024).toFixed(0) : 0} KB
+    </p>
+    <button 
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        setTemplateFile(null);
+      }}
+      className="text-xs text-red-500 hover:underline"
+    >
+      Remove
+    </button>
+  </div>
+) : (
                   <div className="space-y-2">
                     <div className="text-4xl">📁</div>
                     <p className="text-sm text-gray-600 font-medium">Drop master label here</p>
