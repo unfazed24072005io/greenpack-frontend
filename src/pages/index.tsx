@@ -1483,6 +1483,7 @@ export function ResultPage() {
     return { masterBase64, scanBase64 };
   };
 
+<<<<<<< HEAD
 
 // Initialize OpenAI
 const openai = new OpenAI({
@@ -1490,6 +1491,15 @@ const openai = new OpenAI({
   dangerouslyAllowBrowser: true
 });
 
+=======
+  // Generate difference image with highlighted areas
+  // Generate difference image with 16-piece grid comparison
+// Generate difference image with 16-piece grid comparison (THIN RED BORDERS ONLY)
+// Generate difference image with 16-piece grid comparison - FIXED THRESHOLD
+// Generate difference image - ONLY red dotted borders around mismatched sections (NO grid lines)
+// SENSITIVE VERSION - Detects differences as low as 1%
+// Generate difference image with highlighted areas
+>>>>>>> addd0aa6efd43376a924b0b7ba72c254f25e564a
 const generateDiffImage = async (masterBase64: string, scanBase64: string): Promise<string> => {
   return new Promise((resolve) => {
     const masterImg = new Image();
@@ -1500,8 +1510,12 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
       loadedCount++;
       if (loadedCount === 2) {
         try {
+<<<<<<< HEAD
           const gridSize = 6;
           const DIFF_THRESHOLD = 14; // Only show cells with >8% difference
+=======
+          console.log('🖼️ Generating diff image');
+>>>>>>> addd0aa6efd43376a924b0b7ba72c254f25e564a
           
           const cellWidth = Math.floor(scanImg.width / gridSize);
           const cellHeight = Math.floor(scanImg.height / gridSize);
@@ -1537,6 +1551,10 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
             return;
           }
           
+<<<<<<< HEAD
+=======
+          const DIFF_THRESHOLD = 12; // 12% difference threshold
+>>>>>>> addd0aa6efd43376a924b0b7ba72c254f25e564a
           const mismatchedCells: { row: number; col: number; diffPercent: number; x: number; y: number; w: number; h: number }[] = [];
           let totalDiffAllCells = 0;
           
@@ -1569,7 +1587,10 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
               
               console.log(`Cell [${row},${col}] difference: ${diffPercent.toFixed(2)}% - ${diffPercent > DIFF_THRESHOLD ? '❌ MISMATCH' : '✓ OK'}`);
               
+<<<<<<< HEAD
               // INDEPENDENT CHECK - each cell stands alone
+=======
+>>>>>>> addd0aa6efd43376a924b0b7ba72c254f25e564a
               if (diffPercent > DIFF_THRESHOLD) {
                 mismatchedCells.push({ 
                   row, col, diffPercent,
@@ -1581,9 +1602,15 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
             }
           }
           
+<<<<<<< HEAD
           const avgDiffPercent = totalDiffAllCells / (gridSize * gridSize);
           console.log(`📊 RESULTS: ${mismatchedCells.length} cells with >${DIFF_THRESHOLD}% difference (out of ${gridSize * gridSize} cells)`);
           console.log(`📍 Mismatched cell positions:`, mismatchedCells.map(c => `[${c.row},${c.col}]`).join(', '));
+=======
+          const avgDiffPercent = totalDiffAllCells / 16;
+          console.log(`Average difference across all cells: ${avgDiffPercent.toFixed(2)}%`);
+          console.log(`Found ${mismatchedCells.length} cells with >${DIFF_THRESHOLD}% difference`);
+>>>>>>> addd0aa6efd43376a924b0b7ba72c254f25e564a
           
           setDifferenceCount(mismatchedCells.length);
           
@@ -1651,8 +1678,13 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
             ctx.fillText(`Mismatched positions: ${mismatchedCells.map(c => `${c.row},${c.col}`).join('  ')}`, 12, 53);
           } else {
             ctx.fillStyle = '#22A06B';
+<<<<<<< HEAD
             ctx.fillText(`✓ NO DIFFERENCES DETECTED (${gridSize}x${gridSize} grid)`, 12, 28);
             ctx.font = '9px Arial';
+=======
+            ctx.fillText('✓ NO DIFFERENCES DETECTED', 12, 28);
+            ctx.font = '11px Arial';
+>>>>>>> addd0aa6efd43376a924b0b7ba72c254f25e564a
             ctx.fillStyle = '#888888';
             ctx.fillText(`Average difference: ${avgDiffPercent.toFixed(1)}%`, 12, 48);
           }
@@ -1737,6 +1769,7 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
     const alignmentConf = ((job.alignment_confidence || 0) * 100).toFixed(0);
     const ssimSimilarity = ((job.ssim_score || 0) * 100).toFixed(1);
     
+<<<<<<< HEAD
     // Use differenceCount from component state (matches web screen)
     let differencesFound = differenceCount;
     
@@ -1757,6 +1790,9 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
     const pantoneMatch = job.pantone_match_score || 0;
     
     // PAGE 1 - HEADER
+=======
+    // PAGE 1 - SCORE, SUMMARY, AND ONE PANTONE TABLE
+>>>>>>> addd0aa6efd43376a924b0b7ba72c254f25e564a
     pdf.setFillColor(13, 27, 42);
     pdf.rect(0, 0, pdf.internal.pageSize.getWidth(), 14, 'F');
     pdf.setFontSize(10);
@@ -1764,7 +1800,10 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
     pdf.setTextColor(255, 255, 255);
     pdf.text('GREENPACK PRO - INSPECTION REPORT', pdf.internal.pageSize.getWidth() / 2, 9, { align: 'center' });
     
+<<<<<<< HEAD
     // SCORE BOX
+=======
+>>>>>>> addd0aa6efd43376a924b0b7ba72c254f25e564a
     const scoreText = `${Math.round(score)}`;
     const statusText = isPass ? 'PASS' : 'FAIL';
     
@@ -1792,7 +1831,10 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
     
     let yPos = boxY + boxHeight + 18;
     
+<<<<<<< HEAD
     // INSPECTION SUMMARY TABLE
+=======
+>>>>>>> addd0aa6efd43376a924b0b7ba72c254f25e564a
     pdf.setFontSize(12);
     pdf.setFont('helvetica', 'bold');
     pdf.setTextColor(13, 27, 42);
@@ -1832,9 +1874,26 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
     
     yPos = (pdf as any).lastAutoTable.finalY + 12;
     
+<<<<<<< HEAD
     // ============================================================
     // REAL DIFFERENCES DETECTED - PLAIN TEXT VERSION
     // ============================================================
+=======
+    const estimatedTableHeight = 60;
+    const pageRemainingHeight = pdf.internal.pageSize.getHeight() - currentY - 20;
+    
+    if (pageRemainingHeight < estimatedTableHeight) {
+      pdf.addPage();
+      pdf.setFillColor(13, 27, 42);
+      pdf.rect(0, 0, pdf.internal.pageSize.getWidth(), 14, 'F');
+      pdf.setFontSize(10);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(255, 255, 255);
+      pdf.text('GREENPACK PRO — INSPECTION REPORT', pdf.internal.pageSize.getWidth() / 2, 9, { align: 'center' });
+      currentY = 28;
+    }
+    
+>>>>>>> addd0aa6efd43376a924b0b7ba72c254f25e564a
     pdf.setFontSize(12);
     pdf.setFont('helvetica', 'bold');
     pdf.setTextColor(13, 27, 42);
@@ -1842,6 +1901,7 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
     yPos += 3;
     
     pdf.setDrawColor(135, 206, 235);
+<<<<<<< HEAD
     pdf.line(15, yPos, pdf.internal.pageSize.getWidth() - 15, yPos);
     yPos += 6;
     
@@ -1907,6 +1967,194 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
     
     // IMAGES
     if (masterImageUrl && (diffImageUrl || scanImageUrl)) {
+=======
+    pdf.line(15, currentY, pdf.internal.pageSize.getWidth() - 15, currentY);
+    currentY += 6;
+    
+    const masterColors = job.master_pantone_colors || [];
+    const scanColors = job.scan_pantone_colors || [];
+    
+    const combinedTableData = [];
+    const maxRows = Math.max(masterColors.length, scanColors.length);
+    
+    for (let i = 0; i < Math.min(maxRows, 8); i++) {
+      const masterColor = masterColors[i];
+      const scanColor = scanColors[i];
+      
+      combinedTableData.push([
+        '',
+        masterColor?.best_match_code || '—',
+        masterColor?.best_match_delta_e?.toFixed(1) || '—',
+        masterColor?.hex?.toUpperCase() || '—',
+        masterColor?.match_confidence?.replace('_', ' ').toUpperCase() || '—',
+        '',
+        scanColor?.best_match_code || '—',
+        scanColor?.best_match_delta_e?.toFixed(1) || '—',
+        scanColor?.hex?.toUpperCase() || '—',
+        scanColor?.match_confidence?.replace('_', ' ').toUpperCase() || '—'
+      ]);
+    }
+    
+    autoTable(pdf, {
+      startY: currentY,
+      head: [
+        [
+          '', 'Master PMS', 'Master ΔE', 'Master Hex', 'Confidence',
+          '', 'Printed PMS', 'Printed ΔE', 'Printed Hex', 'Confidence'
+        ]
+      ],
+      body: combinedTableData,
+      theme: 'striped',
+      styles: {
+        fontSize: 7,
+        cellPadding: { top: 3, bottom: 3, left: 2, right: 2 },
+        halign: 'center',
+        valign: 'middle',
+      },
+      headStyles: {
+        fillColor: [13, 27, 42],
+        textColor: [255, 255, 255],
+        fontSize: 8,
+        fontStyle: 'bold',
+        halign: 'center',
+      },
+      alternateRowStyles: { fillColor: [249, 250, 251] },
+      columnStyles: {
+        0: { cellWidth: 10 },
+        1: { cellWidth: 32 },
+        2: { cellWidth: 20 },
+        3: { cellWidth: 30 },
+        4: { cellWidth: 28 },
+        5: { cellWidth: 10 },
+        6: { cellWidth: 32 },
+        7: { cellWidth: 20 },
+        8: { cellWidth: 30 },
+        9: { cellWidth: 28 },
+      },
+      margin: { left: 12, right: 12 },
+      pageBreak: 'avoid',
+      didDrawCell: (data) => {
+        if (data.column.index === 0 && data.row.section === 'body' && data.cell.section === 'body') {
+          const colorData = masterColors[data.row.index];
+          if (colorData && colorData.hex) {
+            const x = data.cell.x + 1.5;
+            const y = data.cell.y + 2;
+            const width = 8;
+            const height = 8;
+            
+            pdf.setFillColor(
+              parseInt(colorData.hex.slice(1, 3), 16),
+              parseInt(colorData.hex.slice(3, 5), 16),
+              parseInt(colorData.hex.slice(5, 7), 16)
+            );
+            pdf.rect(x, y, width, height, 'F');
+            pdf.setDrawColor(180, 180, 180);
+            pdf.rect(x, y, width, height, 'S');
+          }
+        }
+        if (data.column.index === 5 && data.row.section === 'body' && data.cell.section === 'body') {
+          const colorData = scanColors[data.row.index];
+          if (colorData && colorData.hex) {
+            const x = data.cell.x + 1.5;
+            const y = data.cell.y + 2;
+            const width = 8;
+            const height = 8;
+            
+            pdf.setFillColor(
+              parseInt(colorData.hex.slice(1, 3), 16),
+              parseInt(colorData.hex.slice(3, 5), 16),
+              parseInt(colorData.hex.slice(5, 7), 16)
+            );
+            pdf.rect(x, y, width, height, 'F');
+            pdf.setDrawColor(180, 180, 180);
+            pdf.rect(x, y, width, height, 'S');
+          }
+        }
+      },
+    });
+    
+    pdf.setFontSize(7);
+    pdf.setFont('helvetica', 'normal');
+    pdf.setTextColor(120, 120, 120);
+    pdf.text(`Pantone TCX Library • Delta-E CIE2000 • Generated: ${new Date().toLocaleString()}`, pdf.internal.pageSize.getWidth() / 2, pdf.internal.pageSize.getHeight() - 10, { align: 'center' });
+    pdf.text('1', pdf.internal.pageSize.getWidth() / 2, pdf.internal.pageSize.getHeight() - 6, { align: 'center' });
+    
+    // PAGE 2
+    pdf.addPage();
+    
+    pdf.setFillColor(13, 27, 42);
+    pdf.rect(0, 0, pdf.internal.pageSize.getWidth(), 14, 'F');
+    pdf.setFontSize(10);
+    pdf.setFont('helvetica', 'bold');
+    pdf.setTextColor(255, 255, 255);
+    pdf.text('GREENPACK PRO — INSPECTION REPORT', pdf.internal.pageSize.getWidth() / 2, 9, { align: 'center' });
+    
+    let page2Y = 28;
+    
+// REAL DIFFERENCES DETECTED - CLEAN VERSION
+// REAL DIFFERENCES DETECTED - EXACT MATCH TO RESULTPAGE UI
+pdf.setFontSize(12);
+pdf.setFont('helvetica', 'bold');
+pdf.setTextColor(13, 27, 42);
+pdf.text('Real Differences Detected', 15, page2Y);
+page2Y += 3;
+
+pdf.setDrawColor(135, 206, 235);
+pdf.line(15, page2Y, pdf.internal.pageSize.getWidth() - 15, page2Y);
+page2Y += 6;
+
+let hasDifferences = false;
+let currentYforDefects = page2Y;
+
+// Defects from analysis (SAME AS UI)
+if (job.defects && job.defects.length > 0) {
+  hasDifferences = true;
+  pdf.setFontSize(9);
+  pdf.setFont('helvetica', 'bold');
+  pdf.setTextColor(229, 56, 59);
+  pdf.text('DEFECTS DETECTED', 25, currentYforDefects);
+  currentYforDefects += 6;
+  
+  pdf.setFontSize(8);
+  pdf.setFont('helvetica', 'normal');
+  pdf.setTextColor(60, 60, 60);
+  
+  for (const defect of job.defects.slice(0, 3)) {
+    const typeName = defect.type === 'structural_diff' ? 'Layout Difference' :
+                     defect.type === 'color_shift' ? 'Color Shift' :
+                     defect.type === 'pantone_mismatch' ? 'Pantone Mismatch' :
+                     defect.type.replace(/_/g, ' ').toUpperCase();
+    
+    pdf.text(`• ${typeName}`, 30, currentYforDefects);
+    currentYforDefects += 4.5;
+    pdf.setFontSize(7.5);
+    pdf.text(`  ${defect.description || 'No description'}`, 32, currentYforDefects);
+    currentYforDefects += 4;
+    
+    if (defect.delta_e) {
+      pdf.text(`  ΔE: ${defect.delta_e.toFixed(2)}`, 32, currentYforDefects);
+      currentYforDefects += 4;
+    }
+    currentYforDefects += 2;
+    pdf.setFontSize(8);
+  }
+}
+
+
+// If no differences
+if (!hasDifferences) {
+  pdf.setFontSize(9);
+  pdf.setFont('helvetica', 'normal');
+  pdf.setTextColor(34, 160, 107);
+  pdf.text('✓ No differences detected - Label meets quality standards', 25, currentYforDefects);
+  currentYforDefects += 10;
+}
+
+page2Y = currentYforDefects + 5;
+    
+    const imgToUse = diffImageUrl || scanImageUrl;
+    if (masterImageUrl && imgToUse) {
+>>>>>>> addd0aa6efd43376a924b0b7ba72c254f25e564a
       pdf.setFontSize(12);
       pdf.setFont('helvetica', 'bold');
       pdf.setTextColor(13, 27, 42);
@@ -1963,7 +2211,16 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
       }
     }
     
+<<<<<<< HEAD
     pdf.save(`${productName.replace(/\s+/g, '_')}_Report.pdf`);
+=======
+    pdf.setFontSize(7);
+    pdf.setFont('helvetica', 'normal');
+    pdf.setTextColor(120, 120, 120);
+    pdf.text('2', pdf.internal.pageSize.getWidth() / 2, pdf.internal.pageSize.getHeight() - 6, { align: 'center' });
+    
+    pdf.save(`${productName.replace(/\s+/g, '_')}_Report_${new Date().toISOString().split('T')[0]}.pdf`);
+>>>>>>> addd0aa6efd43376a924b0b7ba72c254f25e564a
     toast.success('PDF report generated!', { id: 'pdf-gen' });
     
   } catch (error) {
