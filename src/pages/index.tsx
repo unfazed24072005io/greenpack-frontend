@@ -2498,18 +2498,16 @@ export function JobsPage() {
   );
 }
 
-// ═══════════════════════════════════════════════════════════
-// TEMPLATES PAGE
-// ═══════════════════════════════════════════════════════════
-
 export function TemplatesPage() {
   const [search, setSearch] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [newTemplate, setNewTemplate] = useState({ client_name: '', product_name: '', version: '1.0' });
   const [templateFile, setTemplateFile] = useState<File | null>(null);
+  const [templatePreview, setTemplatePreview] = useState<string | null>(null);
   const [templates, setTemplates] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
+  
   useEffect(() => {
     async function loadTemplates() {
       try {
@@ -2517,6 +2515,7 @@ export function TemplatesPage() {
         setTemplates(data);
       } catch (err) {
         console.error('Failed to load templates:', err);
+        toast.error('Failed to load templates');
       } finally {
         setLoading(false);
       }
@@ -2524,44 +2523,133 @@ export function TemplatesPage() {
     loadTemplates();
   }, []);
 
-  const filtered = templates.filter(t =>
-    !search || 
-    t.client_name?.toLowerCase().includes(search.toLowerCase()) ||
-    t.product_name?.toLowerCase().includes(search.toLowerCase())
-  );
+  // Compress and convert image to Base64 for storage
+  const compressImageToBase64 = (file: File, maxSizeKB = 100): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = (event) => {
+        const img = new Image();
+        img.src = event.target?.result as string;
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+          
+          // Scale down for thumbnail
+          const maxDim = 200;
+          if (width > maxDim) {
+            height = (height * maxDim) / width;
+            width = maxDim;
+          }
+          if (height > maxDim) {
+            width = (width * maxDim) / height;
+            height = maxDim;
+          }
+          
+          canvas.width = width;
+          canvas.height = height;
+          
+          const ctx = canvas.getContext('2d');
+          ctx?.drawImage(img, 0, 0, width, height);
+          
+          // Compress to under 100KB
+          let quality = 0.7;
+          let result = canvas.toDataURL('image/jpeg', quality);
+          
+          // Reduce quality until size is under 100KB
+          while (result.length > 100 * 1024 && quality > 0.2) {
+            quality -= 0.1;
+            result = canvas.toDataURL('image/jpeg', quality);
+          }
+          
+          resolve(result);
+        };
+        img.onerror = reject;
+      };
+      reader.onerror = reject;
+    });
+  };
 
   async function handleCreate(e: React.FormEvent) {
-  e.preventDefault();
-  if (!templateFile) { toast.error('Upload a master PDF'); return; }
-  
-  setIsLoading(true);
-  try {
-    // Skip actual upload for testing - use a placeholder URL
-    const templateUrl = `https://via.placeholder.com/300x200?text=${encodeURIComponent(templateFile.name)}`;
+    e.preventDefault();
+    if (!templateFile) {
+      toast.error('Upload a master image');
+      return;
+    }
     
-    await templateService.createTemplate({
-      ...newTemplate,
-      templateUrl,
-      thumbnail_path: templateUrl,
-      color_threshold: 2.0,
-      ssim_threshold: 0.75,
-      createdBy: auth.currentUser?.uid
-    });
-    
-    toast.success('Template created (demo mode)');
-    const updated = await templateService.getTemplates();
-    setTemplates(updated);
-    setShowCreate(false);
-    setTemplateFile(null);
-    setNewTemplate({ client_name: '', product_name: '', version: '1.0' });
-  } catch (err: any) {
-    toast.error(err.message || 'Failed to create template');
-  } finally {
-    setIsLoading(false);
+    setIsLoading(true);
+    try {
+      // Convert image to Base64 thumbnail
+      let thumbnailBase64: string;
+      
+      if (templateFile.type === 'application/pdf') {
+        // For PDF, create a styled thumbnail
+        const canvas = document.createElement('canvas');
+        canvas.width = 300;
+        canvas.height = 200;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.fillStyle = '#F0F6FF';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = '#1A73E8';
+          ctx.font = 'bold 32px Arial';
+          ctx.fillText('📄', canvas.width/2 - 20, canvas.height/2 - 10);
+          ctx.font = '12px Arial';
+          ctx.fillStyle = '#666';
+          const fileName = templateFile.name.length > 25 
+            ? templateFile.name.substring(0, 22) + '...' 
+            : templateFile.name;
+          ctx.fillText(fileName, canvas.width/2 - 40, canvas.height/2 + 30);
+          ctx.font = '10px Arial';
+          ctx.fillStyle = '#999';
+          ctx.fillText('PDF Document', canvas.width/2 - 35, canvas.height/2 + 50);
+          thumbnailBase64 = canvas.toDataURL('image/png');
+        } else {
+          thumbnailBase64 = '';
+        }
+      } else {
+        // For images, compress and store as Base64
+        thumbnailBase64 = await compressImageToBase64(templateFile, 100);
+      }
+      
+      // Create template data with Base64 thumbnail
+      const templateData = {
+        client_name: newTemplate.client_name,
+        product_name: newTemplate.product_name,
+        version: newTemplate.version,
+        color_threshold: 2.0,
+        ssim_threshold: 0.75,
+        fileName: templateFile.name,
+        fileType: templateFile.type,
+        fileSize: templateFile.size,
+        createdBy: auth.currentUser?.uid || 'unknown',
+        thumbnailBase64: thumbnailBase64 // Store Base64 directly
+      };
+      
+      // Store in Firebase
+      await templateService.createTemplate(templateData);
+      
+      toast.success(`Template "${newTemplate.product_name}" created`);
+      
+      // Reload templates
+      const updated = await templateService.getTemplates();
+      setTemplates(updated);
+      setShowCreate(false);
+      setTemplateFile(null);
+      setTemplatePreview(null);
+      setNewTemplate({ client_name: '', product_name: '', version: '1.0' });
+      
+    } catch (err: any) {
+      console.error('Create template error:', err);
+      toast.error(err.message || 'Failed to create template');
+    } finally {
+      setIsLoading(false);
+    }
   }
-}
 
   async function handleDelete(id: string) {
+    if (!confirm('Delete this template?')) return;
     try {
       await templateService.deleteTemplate(id);
       toast.success('Template deleted');
@@ -2573,14 +2661,38 @@ export function TemplatesPage() {
   }
 
   const drop = useDropzone({
-    accept: { 'application/pdf': ['.pdf'], 'image/*': [] },
+    accept: { 
+      'image/jpeg': ['.jpg', '.jpeg'],
+      'image/png': ['.png'],
+      'image/webp': ['.webp'],
+      'application/pdf': ['.pdf']
+    },
     maxFiles: 1,
-    onDrop: (files) => setTemplateFile(files[0]),
+    onDrop: async (files) => {
+      const file = files[0];
+      setTemplateFile(file);
+      
+      // Generate preview for images only
+      if (file.type.startsWith('image/')) {
+        const preview = await compressImageToBase64(file, 200);
+        setTemplatePreview(preview);
+      } else {
+        setTemplatePreview(null);
+      }
+    },
   });
+
+  const filtered = templates.filter(t =>
+    !search || 
+    t.client_name?.toLowerCase().includes(search.toLowerCase()) ||
+    t.product_name?.toLowerCase().includes(search.toLowerCase())
+  );
 
   return (
     <div>
-      <PageHeader title="Template Library" subtitle="Saved master label templates for quick loading"
+      <PageHeader 
+        title="Template Library" 
+        subtitle="Saved master label templates for quick loading"
         action={
           <button onClick={() => setShowCreate(true)}
             className="flex items-center gap-2 px-4 py-2 bg-[#1A73E8] text-white rounded-lg text-sm font-semibold hover:bg-blue-700">
@@ -2591,8 +2703,12 @@ export function TemplatesPage() {
       <div className="p-8 space-y-4">
         <div className="relative max-w-sm">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search templates..."
-            className="w-full pl-9 pr-4 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1A73E8]" />
+          <input 
+            value={search} 
+            onChange={e => setSearch(e.target.value)} 
+            placeholder="Search templates by client or product..."
+            className="w-full pl-9 pr-4 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1A73E8]" 
+          />
         </div>
 
         {loading ? (
@@ -2601,7 +2717,7 @@ export function TemplatesPage() {
           <div className="py-20 text-center">
             <BookOpen size={48} className="mx-auto text-gray-200 mb-4" />
             <h3 className="text-lg font-bold text-gray-400">No templates yet</h3>
-            <p className="text-sm text-gray-400 mt-1">Save approved master PDFs for one-click loading</p>
+            <p className="text-sm text-gray-400 mt-1">Save approved master labels for one-click loading</p>
             <button onClick={() => setShowCreate(true)}
               className="mt-4 px-4 py-2 bg-[#1A73E8] text-white rounded-lg text-sm font-semibold">
               Add First Template
@@ -2610,34 +2726,64 @@ export function TemplatesPage() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {filtered.map((t: any) => (
-              <div key={t.id} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden hover:shadow-md transition">
-                <div className="h-32 bg-gradient-to-br from-[#F0F6FF] to-[#E8EEF4] flex items-center justify-center">
-                  {t.thumbnail_path ? (
-                    <img src={t.thumbnail_path} alt="Template thumbnail" className="h-full w-full object-contain" />
+              <div key={t.id} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden hover:shadow-md transition group">
+                {/* Thumbnail with Base64 image */}
+                <div className="h-32 bg-gradient-to-br from-[#F0F6FF] to-[#E8EEF4] flex items-center justify-center relative">
+                  {t.thumbnailBase64 ? (
+                    <img 
+                      src={t.thumbnailBase64} 
+                      alt={t.product_name}
+                      className="h-full w-full object-contain"
+                      onError={(e) => {
+                        // Fallback if image fails to load
+                        (e.target as HTMLImageElement).style.display = 'none';
+                        const parent = (e.target as HTMLImageElement).parentElement;
+                        if (parent) {
+                          parent.innerHTML = `<div class="flex flex-col items-center justify-center h-full">
+                            <span class="text-4xl">📄</span>
+                            <span class="text-xs text-gray-400 mt-2">${t.fileName?.substring(0, 20) || 'Template'}</span>
+                          </div>`;
+                        }
+                      }}
+                    />
                   ) : (
-                    <FileText size={40} className="text-gray-300" />
+                    <div className="flex flex-col items-center justify-center h-full">
+                      <FileText size={40} className="text-gray-300" />
+                      <span className="text-xs text-gray-400 mt-2">{t.fileName?.substring(0, 20) || 'No preview'}</span>
+                    </div>
                   )}
-                </div>
-                <div className="p-4 space-y-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs px-2 py-0.5 bg-[#1A73E8]/10 text-[#1A73E8] rounded font-semibold">{t.client_name}</span>
-                    <span className="text-xs text-gray-400">v{t.version}</span>
+                  {/* File type badge */}
+                  <div className="absolute top-2 right-2">
+                    <span className="text-[10px] px-1.5 py-0.5 bg-white/80 rounded-full text-gray-500 font-medium">
+                      {t.fileType?.includes('pdf') ? 'PDF' : t.fileType?.includes('image') ? 'IMG' : 'FILE'}
+                    </span>
                   </div>
-                  <h3 className="font-bold text-sm text-[#0D1B2A] leading-tight">{t.product_name}</h3>
+                </div>
+                
+                <div className="p-4 space-y-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs px-2 py-0.5 bg-[#1A73E8]/10 text-[#1A73E8] rounded font-semibold">
+                      {t.client_name || 'No client'}
+                    </span>
+                    <span className="text-xs text-gray-400">v{t.version || '1.0'}</span>
+                  </div>
+                  <h3 className="font-bold text-sm text-[#0D1B2A] leading-tight">
+                    {t.product_name || 'Unnamed Template'}
+                  </h3>
                   <div className="text-xs text-gray-400">
                     ΔE: {t.color_threshold || 2.0} | SSIM: {t.ssim_threshold || 0.75}
                   </div>
                   <div className="flex gap-2 pt-1">
                     <button 
                       onClick={() => {
-                        // Use template functionality
                         toast.success(`Template "${t.product_name}" loaded`);
                       }}
-                      className="flex-1 py-1.5 bg-[#1A73E8] text-white rounded-lg text-xs font-semibold hover:bg-blue-700">
+                      className="flex-1 py-1.5 bg-[#1A73E8] text-white rounded-lg text-xs font-semibold hover:bg-blue-700 transition">
                       Use Template
                     </button>
-                    <button onClick={() => handleDelete(t.id)}
-                      className="p-1.5 border border-gray-200 rounded-lg text-gray-400 hover:text-red-500 hover:border-red-200">
+                    <button 
+                      onClick={() => handleDelete(t.id)}
+                      className="p-1.5 border border-gray-200 rounded-lg text-gray-400 hover:text-red-500 hover:border-red-200 transition">
                       <Trash2 size={12} />
                     </button>
                   </div>
@@ -2648,48 +2794,133 @@ export function TemplatesPage() {
         )}
       </div>
 
-      {/* Create modal */}
+      {/* Create Template Modal */}
       {showCreate && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-xl font-bold text-[#0D1B2A]">Add New Template</h2>
-              <button onClick={() => setShowCreate(false)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+              <button 
+                onClick={() => {
+                  setShowCreate(false);
+                  setTemplateFile(null);
+                  setTemplatePreview(null);
+                }} 
+                className="text-gray-400 hover:text-gray-600">
+                <X size={20} />
+              </button>
             </div>
+            
             <form onSubmit={handleCreate} className="space-y-4">
-              <div {...drop.getRootProps()}
-                className={clsx('border-2 border-dashed rounded-xl p-4 text-center cursor-pointer',
-                  drop.isDragActive ? 'border-[#1A73E8] bg-blue-50' : templateFile ? 'border-green-400 bg-green-50' : 'border-gray-200')}>
+              {/* Dropzone for file upload */}
+              <div 
+                {...drop.getRootProps()}
+                className={clsx(
+                  'border-2 border-dashed rounded-xl p-4 text-center cursor-pointer transition',
+                  drop.isDragActive ? 'border-[#1A73E8] bg-blue-50' : 
+                  templateFile ? 'border-green-400 bg-green-50' : 'border-gray-200 hover:border-[#1A73E8] hover:bg-blue-50/30'
+                )}
+              >
                 <input {...drop.getInputProps()} />
-                {templateFile ? (
-                  <p className="text-sm text-green-700 font-medium">{templateFile.name}</p>
+                {templatePreview ? (
+                  <div className="space-y-2">
+                    <img 
+                      src={templatePreview} 
+                      alt="Preview" 
+                      className="w-32 h-32 object-contain mx-auto rounded-lg"
+                    />
+                    <p className="text-sm text-green-700 font-medium">{templateFile?.name}</p>
+                    <p className="text-xs text-gray-500">
+                      {(templateFile?.size / 1024).toFixed(0)} KB
+                    </p>
+                    <button 
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setTemplateFile(null);
+                        setTemplatePreview(null);
+                      }}
+                      className="text-xs text-red-500 hover:underline"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ) : templateFile ? (
+                  <div className="space-y-2">
+                    <div className="text-3xl">📄</div>
+                    <p className="text-sm text-green-700 font-medium">{templateFile.name}</p>
+                    <p className="text-xs text-gray-500">
+                      {(templateFile.size / 1024).toFixed(0)} KB
+                    </p>
+                    <button 
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setTemplateFile(null);
+                      }}
+                      className="text-xs text-red-500 hover:underline"
+                    >
+                      Remove
+                    </button>
+                  </div>
                 ) : (
-                  <p className="text-sm text-gray-500">Drop master PDF here</p>
+                  <div className="space-y-2">
+                    <div className="text-4xl">📁</div>
+                    <p className="text-sm text-gray-600 font-medium">Drop master label here</p>
+                    <p className="text-xs text-gray-400">JPG, PNG, WebP, or PDF (max 5MB)</p>
+                  </div>
                 )}
               </div>
+              
+              {/* Template details */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-semibold text-gray-600 block mb-1">Client Name *</label>
-                  <input value={newTemplate.client_name} onChange={e => setNewTemplate(p => ({...p, client_name: e.target.value}))}
-                    required className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1A73E8]" />
+                  <input 
+                    value={newTemplate.client_name} 
+                    onChange={e => setNewTemplate(p => ({...p, client_name: e.target.value}))}
+                    required 
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1A73E8]" 
+                  />
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-gray-600 block mb-1">Version</label>
-                  <input value={newTemplate.version} onChange={e => setNewTemplate(p => ({...p, version: e.target.value}))}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1A73E8]" />
+                  <input 
+                    value={newTemplate.version} 
+                    onChange={e => setNewTemplate(p => ({...p, version: e.target.value}))}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1A73E8]" 
+                  />
                 </div>
               </div>
+              
               <div>
                 <label className="text-xs font-semibold text-gray-600 block mb-1">Product Name *</label>
-                <input value={newTemplate.product_name} onChange={e => setNewTemplate(p => ({...p, product_name: e.target.value}))}
-                  required className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1A73E8]" />
+                <input 
+                  value={newTemplate.product_name} 
+                  onChange={e => setNewTemplate(p => ({...p, product_name: e.target.value}))}
+                  required 
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1A73E8]" 
+                />
               </div>
+              
               <div className="flex gap-3 pt-2">
-                <button type="button" onClick={() => setShowCreate(false)}
-                  className="flex-1 py-2 border border-gray-200 rounded-lg text-sm font-semibold hover:bg-gray-50">Cancel</button>
-                <button type="submit"
-                  className="flex-1 py-2 bg-[#1A73E8] text-white rounded-lg text-sm font-semibold hover:bg-blue-700">
-                  Save Template
+                <button 
+                  type="button" 
+                  onClick={() => {
+                    setShowCreate(false);
+                    setTemplateFile(null);
+                    setTemplatePreview(null);
+                  }}
+                  className="flex-1 py-2 border border-gray-200 rounded-lg text-sm font-semibold hover:bg-gray-50 transition"
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit"
+                  disabled={isLoading || !templateFile}
+                  className="flex-1 py-2 bg-[#1A73E8] text-white rounded-lg text-sm font-semibold hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {isLoading ? <><Spinner size={14} /> Saving...</> : 'Save Template'}
                 </button>
               </div>
             </form>
@@ -2699,7 +2930,6 @@ export function TemplatesPage() {
     </div>
   );
 }
-
 // ═══════════════════════════════════════════════════════════
 // BATCH PAGE
 // ═══════════════════════════════════════════════════════════
