@@ -1003,7 +1003,7 @@ async function analyzeImagesLocally(masterFile: File, scanFile: File, colorThres
   defects.push({
     type: 'structural_diff',
     severity: mismatchedCellsCount > 10 ? 'critical' : mismatchedCellsCount > 6 ? 'warning' : 'minor',
-    description: `${differenceCount} of 16 sections (${Math.round(differenceCount / 16 * 100)}%) differ from master`,
+    description: `${mismatchedCellsCount} of 16 sections (${Math.round(mismatchedCellsCount / 16 * 100)}%) differ from master`,
     area_pixels: mismatchedCellsCount,
     cell_details: cellDifferenceDetails
   });
