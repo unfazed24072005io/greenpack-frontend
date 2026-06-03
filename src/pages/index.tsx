@@ -1000,14 +1000,14 @@ async function analyzeImagesLocally(masterFile: File, scanFile: File, colorThres
   // Generate defects based on mismatched cells (use actual count)
   const defects = [];
   if (mismatchedCellsCount > 0) {
-    defects.push({
-      type: 'structural_diff',
-      severity: mismatchedCellsCount > 10 ? 'critical' : mismatchedCellsCount > 6 ? 'warning' : 'minor',
-      description: `${mismatchedCellsCount} of 16 sections (${Math.round(mismatchedCellsCount / 16 * 100)}%) differ from master`,
-      area_pixels: mismatchedCellsCount,
-      cell_details: cellDifferenceDetails
-    });
-  }
+  defects.push({
+    type: 'structural_diff',
+    severity: mismatchedCellsCount > 10 ? 'critical' : mismatchedCellsCount > 6 ? 'warning' : 'minor',
+    description: `${differenceCount} of 16 sections (${Math.round(differenceCount / 16 * 100)}%) differ from master`,
+    area_pixels: mismatchedCellsCount,
+    cell_details: cellDifferenceDetails
+  });
+}
   
   if (colorDiff > colorThreshold * 10) {
     defects.push({
@@ -1736,25 +1736,18 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
     const alignmentConf = ((job.alignment_confidence || 0) * 100).toFixed(0);
     const ssimSimilarity = ((job.ssim_score || 0) * 100).toFixed(1);
     
-    // Use differenceCount from component state (matches web screen)
     let differencesFound = differenceCount;
-    
-    // Also check defects and OCR errors for additional context
     if (differencesFound === 0 && job.defects?.length) {
       differencesFound = job.defects.length;
     }
     if (differencesFound === 0 && job.ocr_errors?.length) {
       differencesFound = job.ocr_errors.length;
     }
-    
-    // If score is 100, force differences to 0
     if (score >= 99.5) {
       differencesFound = 0;
     }
     
-    const meanColorDelta = (job.color_diff_avg || (job.color_score ? (100 - job.color_score) / 2 : 0)).toFixed(3);
-    const pantoneMatch = job.pantone_match_score || 0;
-    
+    // HEADER BAR
     pdf.setFillColor(13, 27, 42);
     pdf.rect(0, 0, pdf.internal.pageSize.getWidth(), 14, 'F');
     pdf.setFontSize(10);
@@ -1762,6 +1755,7 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
     pdf.setTextColor(255, 255, 255);
     pdf.text('GREENPACK PRO - INSPECTION REPORT', pdf.internal.pageSize.getWidth() / 2, 9, { align: 'center' });
     
+    // SCORE CARD
     const scoreText = `${Math.round(score)}`;
     const statusText = isPass ? 'PASS' : 'FAIL';
     
@@ -1789,6 +1783,9 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
     
     let yPos = boxY + boxHeight + 18;
     
+    // ============================================================
+    // INSPECTION SUMMARY TABLE
+    // ============================================================
     pdf.setFontSize(12);
     pdf.setFont('helvetica', 'bold');
     pdf.setTextColor(13, 27, 42);
@@ -1802,8 +1799,9 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
     const summaryData = [
       ['Date', jobDate, 'Overall Score', `${Math.round(score)}%`],
       ['OCR Score', `${job.ocr_score || '---'}%`, 'Color Score', `${job.color_score || '---'}%`],
+      ['SSIM Similarity', `${ssimSimilarity}%`, 'Alignment Confidence', `${alignmentConf}%`],
       ['Pantone Match', `${job.pantone_match_score || '---'}%`, 'Differences Found', `${differencesFound}`],
-      ['Status', isPass ? 'PASS' : 'FAIL', '', '']
+      ['Overall Status', isPass ? 'PASS' : 'FAIL', '', '']
     ];
     
     autoTable(pdf, {
@@ -1828,6 +1826,9 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
     
     yPos = (pdf as any).lastAutoTable.finalY + 12;
     
+    // ============================================================
+    // REAL DIFFERENCES DETECTED SECTION
+    // ============================================================
     pdf.setFontSize(12);
     pdf.setFont('helvetica', 'bold');
     pdf.setTextColor(13, 27, 42);
@@ -1863,9 +1864,6 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
         if (defect.delta_e) {
           diffMessages.push(`    -> Color difference ΔE = ${defect.delta_e.toFixed(1)}`);
         }
-        if (defect.sections_affected) {
-          diffMessages.push(`    -> ${defect.sections_affected} of 16 sections affected`);
-        }
       }
     } else if (job.ocr_errors && job.ocr_errors.length > 0) {
       diffMessages.push(`[TEXT MISMATCH] Printed text differs from master`);
@@ -1889,16 +1887,131 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
       yPos += splitMsg.length * 5 + 2;
     }
     
-    // Add page break if needed for images
-    if (yPos > pdf.internal.pageSize.getHeight() - 60) {
-      pdf.addPage();
-      yPos = 28;
-    } else {
-      yPos += 15;
-    }
+    yPos += 10;
     
-    // IMAGES
-    if (masterImageUrl && (diffImageUrl || scanImageUrl)) {
+    // ============================================================
+// PANTONE COLOR ANALYSIS TABLE - WITH SEPARATE SWATCH COLUMN
+// ============================================================
+if (job.master_pantone_colors?.length > 0 || job.scan_pantone_colors?.length > 0) {
+  
+  pdf.setFontSize(12);
+  pdf.setFont('helvetica', 'bold');
+  pdf.setTextColor(13, 27, 42);
+  pdf.text('Pantone Color Analysis', 15, yPos);
+  yPos += 3;
+  
+  pdf.setDrawColor(135, 206, 235);
+  pdf.line(15, yPos, pdf.internal.pageSize.getWidth() - 15, yPos);
+  yPos += 6;
+  
+  const maxRows = Math.max(job.master_pantone_colors?.length || 0, job.scan_pantone_colors?.length || 0);
+  const pantoneRows = [];
+  
+  for (let i = 0; i < Math.min(maxRows, 6); i++) {
+    const masterColor = job.master_pantone_colors?.[i];
+    const scanColor = job.scan_pantone_colors?.[i];
+    pantoneRows.push([
+      masterColor?.best_match_code || '—',
+      '', // Empty for swatch column
+      masterColor?.best_match_delta_e?.toFixed(1) || '—',
+      masterColor?.hex || '—',
+      scanColor?.best_match_code || '—',
+      '', // Empty for swatch column
+      scanColor?.best_match_delta_e?.toFixed(1) || '—',
+      scanColor?.hex || '—',
+    ]);
+  }
+  
+  autoTable(pdf, {
+    startY: yPos,
+    head: [
+      [
+        { content: 'Master Label', colSpan: 4, styles: { halign: 'center', fillColor: [34, 160, 107], textColor: [255, 255, 255] } },
+        { content: 'Printed Sample', colSpan: 4, styles: { halign: 'center', fillColor: [229, 56, 59], textColor: [255, 255, 255] } }
+      ],
+      ['PMS Code', 'Swatch', 'ΔE', 'Hex', 'PMS Code', 'Swatch', 'ΔE', 'Hex']
+    ],
+    body: pantoneRows,
+    theme: 'striped',
+    headStyles: {
+      fillColor: [13, 27, 42],
+      textColor: [255, 255, 255],
+      fontSize: 8,
+      fontStyle: 'bold',
+      halign: 'center',
+    },
+    styles: {
+      fontSize: 8,
+      cellPadding: { top: 4, bottom: 4, left: 3, right: 3 },
+      halign: 'center',
+      valign: 'middle',
+    },
+    columnStyles: {
+      0: { cellWidth: 28, fontStyle: 'bold' },
+      1: { cellWidth: 16 },
+      2: { cellWidth: 20 },
+      3: { cellWidth: 28 },
+      4: { cellWidth: 28, fontStyle: 'bold' },
+      5: { cellWidth: 16 },
+      6: { cellWidth: 20 },
+      7: { cellWidth: 28 },
+    },
+    margin: { left: 10, right: 10 },
+    didDrawCell: (data) => {
+      // Draw color swatch in Master Swatch column (index 1)
+      if (data.column.index === 1 && data.row.section === 'body' && data.row.index < job.master_pantone_colors?.length) {
+        const masterColor = job.master_pantone_colors?.[data.row.index];
+        if (masterColor && masterColor.hex && masterColor.hex !== '—') {
+          const cellCenterX = data.cell.x + data.cell.width / 2;
+          const cellCenterY = data.cell.y + data.cell.height / 2;
+          const swatchSize = 8;
+          pdf.setFillColor(
+            parseInt(masterColor.hex.slice(1, 3), 16),
+            parseInt(masterColor.hex.slice(3, 5), 16),
+            parseInt(masterColor.hex.slice(5, 7), 16)
+          );
+          pdf.rect(cellCenterX - swatchSize/2, cellCenterY - swatchSize/2, swatchSize, swatchSize, 'F');
+          pdf.setDrawColor(180, 180, 180);
+          pdf.rect(cellCenterX - swatchSize/2, cellCenterY - swatchSize/2, swatchSize, swatchSize, 'S');
+        }
+      }
+      // Draw color swatch in Scan Swatch column (index 5)
+      if (data.column.index === 5 && data.row.section === 'body' && data.row.index < job.scan_pantone_colors?.length) {
+        const scanColor = job.scan_pantone_colors?.[data.row.index];
+        if (scanColor && scanColor.hex && scanColor.hex !== '—') {
+          const cellCenterX = data.cell.x + data.cell.width / 2;
+          const cellCenterY = data.cell.y + data.cell.height / 2;
+          const swatchSize = 8;
+          pdf.setFillColor(
+            parseInt(scanColor.hex.slice(1, 3), 16),
+            parseInt(scanColor.hex.slice(3, 5), 16),
+            parseInt(scanColor.hex.slice(5, 7), 16)
+          );
+          pdf.rect(cellCenterX - swatchSize/2, cellCenterY - swatchSize/2, swatchSize, swatchSize, 'F');
+          pdf.setDrawColor(180, 180, 180);
+          pdf.rect(cellCenterX - swatchSize/2, cellCenterY - swatchSize/2, swatchSize, swatchSize, 'S');
+        }
+      }
+    }
+  });
+  
+  yPos = (pdf as any).lastAutoTable.finalY + 10;
+  
+  // Add match summary
+  if (job.pantone_comparisons && job.pantone_comparisons.length > 0) {
+    const matchedCount = job.pantone_comparisons.filter((c: any) => c.matched).length;
+    pdf.setFontSize(8);
+    pdf.setFont('helvetica', 'italic');
+    pdf.setTextColor(100, 100, 100);
+    pdf.text(`${matchedCount} of ${job.pantone_comparisons.length} PMS colors matched`, 20, yPos);
+    yPos += 8;
+  }
+}
+    
+    // ============================================================
+    // IMAGE COMPARISON SECTION
+    // ============================================================
+    if (masterImageUrl) {
       pdf.setFontSize(12);
       pdf.setFont('helvetica', 'bold');
       pdf.setTextColor(13, 27, 42);
@@ -1948,9 +2061,18 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
             pdf.setTextColor(229, 56, 59);
             pdf.text(`${differenceCount} section(s) with differences`, rightX + imgWidth/2, yPos + imgHeight + 11, { align: 'center' });
           }
+        } else {
+          pdf.setFillColor(240, 240, 240);
+          pdf.rect(rightX, yPos, imgWidth, imgHeight, 'F');
+          pdf.setFontSize(8);
+          pdf.setTextColor(150, 150, 150);
+          pdf.text('No image available', rightX + imgWidth/2, yPos + imgHeight/2, { align: 'center' });
         }
       } catch (err) {
         console.error('Could not embed images:', err);
+        pdf.setFontSize(8);
+        pdf.setTextColor(255, 0, 0);
+        pdf.text('Error loading images', pdf.internal.pageSize.getWidth() / 2, yPos + 40, { align: 'center' });
       }
     }
     
@@ -2133,7 +2255,12 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
               <tbody>
                 <tr className="border-b border-gray-100">
                   <td className="py-2 font-semibold text-gray-600 w-1/4">Date</td>
-                  <td className="py-2 text-[#0D1B2A] w-1/4">{job.createdAt ? new Date(job.createdAt).toLocaleString() : new Date().toLocaleString()}</td>
+                  <td className="py-2 text-[#0D1B2A] w-1/4">
+  {job.createdAt?.toDate ? job.createdAt.toDate().toLocaleString() : 
+   job.createdAt instanceof Date ? job.createdAt.toLocaleString() : 
+   typeof job.createdAt === 'string' ? new Date(job.createdAt).toLocaleString() : 
+   new Date().toLocaleString()}
+</td>
                   <td className="py-2 font-semibold text-gray-600 w-1/4">Alignment Confidence</td>
                   <td className="py-2 text-[#0D1B2A] w-1/4">{Math.round((job.alignment_confidence || 0.947) * 100)}%</td>
                 </tr>
@@ -2241,68 +2368,87 @@ const generateDiffImage = async (masterBase64: string, scanBase64: string): Prom
     Real Differences Detected
   </div>
   <div className="p-3">
-    {job.defects && job.defects.length > 0 ? (
-      <ul className="space-y-2">
-        {job.defects.map((defect: any, idx: number) => (
-          <li key={idx} className="text-xs border-l-3 pl-2" style={{ borderLeftColor: 
-            defect.severity === 'critical' ? '#E5383B' : 
-            defect.severity === 'warning' ? '#F4A22D' : '#1A73E8',
-            borderLeftWidth: '3px', borderLeftStyle: 'solid'
-          }}>
-            <span className="font-semibold">
-              {defect.type === 'structural_diff' ? '📐 Layout Difference' :
-               defect.type === 'color_shift' ? '🎨 Color Shift' :
-               defect.type === 'pantone_mismatch' ? '🎨 Pantone Mismatch' :
-               defect.type === 'text_mismatch' ? '📝 Text Mismatch' : defect.type}
-            </span>
-            <p className="text-gray-600 mt-0.5">{defect.description}</p>
-            {defect.delta_e && (
-              <p className="text-[10px] text-gray-400 mt-0.5">ΔE: {defect.delta_e.toFixed(2)}</p>
-            )}
-            {defect.mismatches && defect.mismatches.length > 0 && (
-              <div className="mt-1">
-                {defect.mismatches.map((m: any, mi: number) => (
-                  <span key={mi} className="inline-block text-[10px] bg-red-50 text-red-600 px-1.5 py-0.5 rounded mr-1">
-                    {m.master_pms} → {m.scan_pms}
-                  </span>
-                ))}
-              </div>
-            )}
-          </li>
-        ))}
-      </ul>
-    ) : job.ocr_errors && job.ocr_errors.length > 0 ? (
-      <ul className="space-y-2">
-        {job.ocr_errors.slice(0, 3).map((err: any, idx: number) => (
-          <li key={idx} className="text-xs border-l-3 pl-2" style={{ borderLeftColor: '#F4A22D', borderLeftWidth: '3px', borderLeftStyle: 'solid' }}>
-            <span className="font-semibold">📝 Text Mismatch</span>
-            <p className="text-gray-600 mt-0.5">OCR confidence: {err.confidence?.toFixed(1)}%</p>
-            <p className="text-[10px] text-gray-500 mt-1">
-              <span className="font-mono">Master: "{err.master_text?.substring(0, 60)}..."</span><br />
-              <span className="font-mono">Scan: "{err.scan_text?.substring(0, 60)}..."</span>
-            </p>
-          </li>
-        ))}
-      </ul>
-    ) : differenceCount > 0 ? (
-      <div className="text-xs text-gray-600">
-        <p className="font-semibold text-amber-600">⚠️ {differenceCount} section(s) show differences</p>
-        <p className="mt-1">The printed sample has {differenceCount} areas that differ from the master label.</p>
-        <p className="text-[10px] text-gray-400 mt-2">See the red dotted boxes in the image comparison above.</p>
-      </div>
-    ) : (
-      <p className="text-xs text-green-600">✓ No differences detected - Label meets quality standards</p>
-    )}
     
-    {/* Summary stats */}
-    {(job.defects?.length > 0 || job.ocr_errors?.length > 0 || differenceCount > 0) && (
-      <div className="mt-3 pt-2 border-t border-gray-100 text-[10px] text-gray-400">
-        <span>Total issues found: </span>
-        <span className="font-bold text-red-500">
-          {(job.defects?.length || 0) + (job.ocr_errors?.length || 0) + (differenceCount > 0 ? 1 : 0)}
-        </span>
-      </div>
-    )}
+    {/* SINGLE SOURCE OF TRUTH - Calculate once */}
+    {(() => {
+      // Calculate total issues consistently
+      const totalDefects = job.defects?.length || 0;
+      const totalOcrErrors = job.ocr_errors?.length || 0;
+      const hasStructuralDiff = differenceCount > 0;
+      
+      // This matches the table's "Differences Found" value
+      const totalDifferencesFound = totalDefects + totalOcrErrors + (hasStructuralDiff ? 1 : 0);
+      
+      return (
+        <>
+          {job.defects && job.defects.length > 0 ? (
+            <ul className="space-y-2">
+              {job.defects.map((defect: any, idx: number) => (
+                <li key={idx} className="text-xs border-l-3 pl-2" style={{ 
+                  borderLeftColor: defect.severity === 'critical' ? '#E5383B' : 
+                                  defect.severity === 'warning' ? '#F4A22D' : '#1A73E8',
+                  borderLeftWidth: '3px', 
+                  borderLeftStyle: 'solid' 
+                }}>
+                  <span className="font-semibold">
+                    {defect.type === 'structural_diff' ? '📐 Layout Difference' :
+                     defect.type === 'color_shift' ? '🎨 Color Shift' :
+                     defect.type === 'pantone_mismatch' ? '🎨 Pantone Mismatch' :
+                     defect.type === 'text_mismatch' ? '📝 Text Mismatch' : defect.type}
+                  </span>
+                  <p className="text-gray-600 mt-0.5">
+  {defect.type === 'structural_diff' 
+    ? `${differenceCount} of 16 sections (${Math.round(differenceCount / 16 * 100)}%) differ from master`
+    : defect.description}
+</p>
+                  {defect.mismatches && defect.mismatches.length > 0 && (
+                    <div className="mt-1">
+                      {defect.mismatches.map((m: any, mi: number) => (
+                        <span key={mi} className="inline-block text-[10px] bg-red-50 text-red-600 px-1.5 py-0.5 rounded mr-1">
+                          {m.master_pms} → {m.scan_pms}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          ) : job.ocr_errors && job.ocr_errors.length > 0 ? (
+            <ul className="space-y-2">
+              {job.ocr_errors.slice(0, 3).map((err: any, idx: number) => (
+                <li key={idx} className="text-xs border-l-3 pl-2" style={{ borderLeftColor: '#F4A22D', borderLeftWidth: '3px', borderLeftStyle: 'solid' }}>
+                  <span className="font-semibold">📝 Text Mismatch</span>
+                  <p className="text-gray-600 mt-0.5">OCR confidence: {err.confidence?.toFixed(1)}%</p>
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    <span className="font-mono">Master: "{err.master_text?.substring(0, 60)}..."</span><br />
+                    <span className="font-mono">Scan: "{err.scan_text?.substring(0, 60)}..."</span>
+                  </p>
+                </li>
+              ))}
+            </ul>
+          ) : differenceCount > 0 ? (
+            <div className="text-xs text-gray-600">
+              <p className="font-semibold text-amber-600">⚠️ {differenceCount} section(s) show differences</p>
+              <p className="mt-1">The printed sample has {differenceCount} areas that differ from the master label.</p>
+              <p className="text-[10px] text-gray-400 mt-2">See the red dotted boxes in the image comparison above.</p>
+            </div>
+          ) : (
+            <p className="text-xs text-green-600">✓ No differences detected - Label meets quality standards</p>
+          )}
+          
+          {/* Summary stats - USING THE SAME CALCULATED VALUE */}
+          {(totalDefects > 0 || totalOcrErrors > 0 || hasStructuralDiff) && (
+            <div className="mt-3 pt-2 border-t border-gray-100 text-[10px] text-gray-400">
+              <span>Total issues found: </span>
+              <span className="font-bold text-red-500">
+                {totalDifferencesFound}
+              </span>
+            </div>
+          )}
+        </>
+      );
+    })()}
+    
   </div>
 </div>
 
